@@ -72,7 +72,7 @@ class PalletLoad:
     length: float = 1.02                   # m, along cell depth
     width: float = 1.22                    # m, along cell width
     height: float = 1.2                    # m, product height EXCLUDING spacers
-    use_spacers: bool = False
+    use_spacers: bool = True
     n_spacers: int = 6                     # spacer layers between box layers
     spacer_thickness: float = 0.03         # m
     spacer_channels: str = "both"          # see SPACER_CHANNELS
