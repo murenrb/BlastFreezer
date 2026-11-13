@@ -80,13 +80,12 @@ def test_single_position_cell_matches_standalone_pallet():
 
 def test_downstream_pallets_freeze_later_and_across_is_slower():
     s = _spacers(Scenario())
-    s.air.flow_per_pallet = 0.25            # low flow so air warming is visible
-    s.cell.inlet_face = "bottom"
+    s.air.flow_total = 8.0                  # low flow (1 m^3/s per lane) so air warming is visible
+    s.cell.inlet_face = "bottom"            # 2 x 4 x 4: 8 lanes of 4
     across = simulate(s)
     ft = across.freeze_times_h
     assert all(a < b for a, b in zip(ft, ft[1:]))
-    s.cell.inlet_face = "front"
-    s.cell.n_deep = 4                         # same series length, along channels
+    s.cell.inlet_face = "left"              # 8 lanes of 4 along the width, along channels
     along = simulate(s)
     assert max(along.freeze_times_h) < max(ft)
     assert summarize(along, s)["all_frozen"]

@@ -16,17 +16,12 @@ from plotly.colors import sample_colorscale
 COLORSCALE = [[0.0, "#1f5fbf"], [0.5, "#8b4fd6"], [1.0, "#d7263d"]]
 ARROW_COLOR = "#2b3a4a"
 
-# view -> (horizontal axis, vertical axis, depth axis), each (cell axis, reversed?)
-# depth index 0 is nearest the viewer.
-VIEWS = {
-    "front": (("width", False), ("height", False), ("depth", False)),
-    "side": (("depth", False), ("height", False), ("width", False)),
-    "top": (("width", False), ("depth", True), ("height", True)),
-}
 FACE = {  # face -> (axis, index of the face's end: 0 = low side, 1 = high side)
     "front": ("depth", 0), "back": ("depth", 1), "left": ("width", 0),
     "right": ("width", 1), "bottom": ("height", 0), "top": ("height", 1),
 }
+GUI_FACES = ("left", "right", "bottom", "top")      # inlet faces offered in the GUI
+MAX_FRAMES = 240                                     # time steps sent to the browser
 
 
 def series_position(face: str, idx: dict, n: dict) -> int:
@@ -40,111 +35,153 @@ def _fill(T: float, T_cold: float, T_hot: float) -> str:
     return sample_colorscale(COLORSCALE, [float(np.clip(x, 0.0, 1.0))])[0]
 
 
+def _fmt_T(cv, T) -> str:
+    return f"{cv('temp', T) + 0.0:.1f}".replace("-0.0", "0.0")
+
+
 def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
-                T_core_by_series: Sequence[float], T_hot: float, T_cold: float,
-                cv: Callable, ul: Callable, T_air_in: float, T_air_out: float | None,
-                flow_text: str = "", view: str = "front", height: int = 560) -> go.Figure:
-    """Pseudo-3D view of the cell: pallets coloured by core temperature, airflow arrows."""
+                T_core_frames, times: Sequence[float], T_out_frames: Sequence,
+                T_hot: float, T_cold: float, cv: Callable, ul: Callable, T_air_in: float,
+                flow_text: str = "", height: int = 560, max_frames: int = MAX_FRAMES) -> go.Figure:
+    """Front view of the cell (width across, height up, depth stacked behind).
+
+    T_core_frames: array (n_times, n_series) of core temperatures by series position.
+    With more than one time, the figure carries animation frames and its own time
+    slider (plus play/pause), so stepping through the solution runs in the browser.
+    """
+    if inlet_face not in GUI_FACES:
+        raise ValueError(f"Cell view supports inlet faces {GUI_FACES}, not '{inlet_face}'.")
+    T_core_frames = np.atleast_2d(np.asarray(T_core_frames, dtype=float))
+    times = list(times)
+    keep = np.unique(np.linspace(0, len(times) - 1, min(len(times), max_frames)).round().astype(int))
     n = {"depth": n_deep, "width": n_wide, "height": n_high}
-    (ha, hr), (va, vr), (da, dr) = VIEWS[view]
-    nh, nv, nd = n[ha], n[va], n[da]
+    nh, nv, nd = n_wide, n_high, n_deep
 
     size = 0.78
     off = min(0.14, 0.42 / max(1, nd - 1))                 # offset per depth step (up-right)
     pitch = size + (nd - 1) * off + 0.28
     font = int(np.clip(150 / max(nh, nv) / max(1.0, pitch), 8, 15))
 
-    fig = go.Figure()
-    hover_x, hover_y, hover_t = [], [], []
-    # draw far layers first so near ones cover them
+    # pallets, far layer first so near layers draw on top
+    pallets = []
     for d in reversed(range(nd)):
         for i in range(nh):
             for j in range(nv):
-                idx = {ha: (nh - 1 - i) if hr else i, va: (nv - 1 - j) if vr else j,
-                       da: (nd - 1 - d) if dr else d}
-                s = series_position(inlet_face, idx, n)
-                T = T_core_by_series[s]
-                x0, y0 = i * pitch + d * off, j * pitch + d * off
-                fig.add_shape(type="rect", x0=x0, y0=y0, x1=x0 + size, y1=y0 + size,
-                              fillcolor=_fill(T, T_cold, T_hot),
-                              line=dict(color="#1b2633", width=1.2), layer="above")
-                if d == 0:
-                    fig.add_annotation(x=x0 + size / 2, y=y0 + size / 2, showarrow=False,
-                                       text=f"{cv('temp', T) + 0.0:.1f}".replace("-0.0", "0.0"), font=dict(color="white", size=font))
-                    stack = []
-                    for dd in range(nd):
-                        k = dict(idx)
-                        k[da] = (nd - 1 - dd) if dr else dd
-                        sk = series_position(inlet_face, k, n)
-                        stack.append(f"{da} {dd + 1}: P{sk + 1} core {cv('temp', T_core_by_series[sk]):.1f} {ul('temp')}")
-                    hover_x.append(x0 + size / 2)
-                    hover_y.append(y0 + size / 2)
-                    hover_t.append("<br>".join(stack))
+                idx = {"width": i, "height": j, "depth": d}
+                pallets.append((i * pitch + d * off, j * pitch + d * off, d,
+                                series_position(inlet_face, idx, n), idx))
+    front = [p for p in pallets if p[2] == 0]
 
-    fig.add_trace(go.Scatter(x=hover_x, y=hover_y, mode="markers", marker=dict(size=1, opacity=0),
-                             hovertext=hover_t, hoverinfo="text", showlegend=False))
-    # colour bar
+    def colors(T):
+        return [_fill(T[s], T_cold, T_hot) for *_, s, _ in pallets]
+
+    def labels(T):
+        return [_fmt_T(cv, T[s]) for *_, s, _ in front]
+
+    def hovers(T, t):
+        out = []
+        for x0, y0, _, _, idx in front:
+            lines = [f"t = {t:.1f} h"]
+            for dd in range(nd):
+                k = dict(idx, depth=dd)
+                sk = series_position(inlet_face, k, n)
+                lines.append(f"depth {dd + 1}: P{sk + 1} core {_fmt_T(cv, T[sk])} {ul('temp')}")
+            out.append("<br>".join(lines))
+        return out
+
+    W = (nh - 1) * pitch + size + (nd - 1) * off
+    H = (nv - 1) * pitch + size + (nd - 1) * off
+    in_xy, out_xy, label_pos = _arrows(inlet_face, W, H)
+    in_label = f"Air in {_fmt_T(cv, T_air_in)} {ul('temp')}" + (f"<br>{flow_text}" if flow_text else "")
+
+    def air_labels(T_out):
+        return [in_label, "Air out " + ("—" if T_out is None else f"{_fmt_T(cv, T_out)} {ul('temp')}")]
+
+    fig = go.Figure()
+    T0 = T_core_frames[keep[0]]
+    for (x0, y0, d, s, idx), c in zip(pallets, colors(T0)):
+        fig.add_trace(go.Scatter(
+            x=[x0, x0 + size, x0 + size, x0, x0], y=[y0, y0, y0 + size, y0 + size, y0],
+            mode="lines", fill="toself", fillcolor=c, line=dict(color="#1b2633", width=1.2),
+            hoveron="fills", hoverinfo="text", showlegend=False,
+            text=f"P{s + 1} · width {idx['width'] + 1}, height {idx['height'] + 1}, depth {d + 1}"))
+    i_text = len(fig.data)
+    fig.add_trace(go.Scatter(x=[x0 + size / 2 for x0, *_ in front], y=[y0 + size / 2 for _, y0, *_ in front],
+                             mode="text", text=labels(T0), textfont=dict(color="white", size=font),
+                             hovertext=hovers(T0, times[keep[0]]), hoverinfo="text", showlegend=False))
+    i_air = len(fig.data)
+    fig.add_trace(go.Scatter(x=[label_pos[0][0], label_pos[1][0]], y=[label_pos[0][1], label_pos[1][1]],
+                             mode="text", text=air_labels(T_out_frames[keep[0]]),
+                             textposition=[label_pos[0][2], label_pos[1][2]],
+                             textfont=dict(size=12, color=ARROW_COLOR), hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(
         x=[None], y=[None], mode="markers", showlegend=False, hoverinfo="skip",
         marker=dict(colorscale=COLORSCALE, cmin=cv("temp", T_cold), cmax=cv("temp", T_hot), color=[0],
                     showscale=True, colorbar=dict(title=dict(text=f"Core<br>{ul('temp')}"),
                                                   thickness=12, len=0.7))))
-
-    W = (nh - 1) * pitch + size + (nd - 1) * off
-    H = (nv - 1) * pitch + size + (nd - 1) * off
-    _arrows(fig, inlet_face, ha, hr, va, vr, da, dr, W, H, off * (nd - 1), size,
-            f"Air in {cv('temp', T_air_in):.1f} {ul('temp')}" + (f"<br>{flow_text}" if flow_text else ""),
-            "Air out " + ("—" if T_air_out is None else f"{cv('temp', T_air_out):.1f} {ul('temp')}"))
-
-    pad = 1.3
-    fig.update_xaxes(visible=False, range=[-pad, W + pad])
-    fig.update_yaxes(visible=False, range=[-pad, H + pad], scaleanchor="x", scaleratio=1)
-    fig.update_layout(height=height, margin=dict(l=0, r=0, t=10, b=0),
-                      plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", hovermode="closest")
-    return fig
-
-
-def _arrows(fig, inlet, ha, hr, va, vr, da, dr, W, H, depth_span, size, in_text, out_text):
-    """Inlet arrow on the upstream side, outlet arrow on the downstream side."""
-    axis, end = FACE[inlet]
-    sign = 1 if end == 0 else -1                      # +1: flow towards higher index on that axis
-    L = 0.9
-    if axis == ha:
-        sx = sign * (-1 if hr else 1)
-        ym = H / 2
-        xin = -0.35 if sx > 0 else W + 0.35
-        xout = W + 0.35 if sx > 0 else -0.35
-        pts = [((xin - sx * L, ym), (xin, ym), in_text, "above"),
-               ((xout, ym), (xout + sx * L, ym), out_text, "above")]
-    elif axis == va:
-        sy = sign * (-1 if vr else 1)
-        xm = W / 2
-        yin = -0.35 if sy > 0 else H + 0.35
-        yout = H + 0.35 if sy > 0 else -0.35
-        pts = [((xm, yin - sy * L), (xm, yin), in_text, "right"),
-               ((xm, yout), (xm, yout + sy * L), out_text, "right")]
-    else:
-        # depth axis: increasing depth points up-right on screen
-        sd = sign * (-1 if dr else 1)
-        near = (size * 0.35, size * 0.35)                 # on the nearest bottom-left pallet
-        far = (W - size * 0.35, H - size * 0.35)          # on the farthest top-right pallet
-        v = np.array([0.6, 0.6])
-        if sd > 0:   # into the screen
-            pts = [(tuple(np.array(near) - v * 0.9), near, in_text, "left"),
-                   (far, tuple(np.array(far) + v), out_text, "right")]
-        else:        # out of the screen
-            pts = [(tuple(np.array(far) + v), far, in_text, "right"),
-                   (near, tuple(np.array(near) - v * 0.9), out_text, "left")]
-    for (x0, y0), (x1, y1), text, where in pts:
+    for (x0, y0), (x1, y1) in (in_xy, out_xy):
         fig.add_annotation(x=x1, y=y1, ax=x0, ay=y0, xref="x", yref="y", axref="x", ayref="y",
                            showarrow=True, arrowhead=2, arrowsize=1.1, arrowwidth=5,
                            arrowcolor=ARROW_COLOR, text="")
-        tx, ty = (x0 + x1) / 2, (y0 + y1) / 2
-        place = {"above": dict(yshift=24, xanchor="center"), "right": dict(xshift=14, xanchor="left"),
-                 "left": dict(xshift=-14, xanchor="right")}[where]
-        fig.add_annotation(x=tx, y=ty, text=text, showarrow=False, xref="x", yref="y",
-                           font=dict(size=12, color=ARROW_COLOR), bgcolor="rgba(255,255,255,0.75)",
-                           align="left", **place)
+
+    pad = 1.5
+    xpad = 3.2 if inlet_face in ("left", "right") else pad      # room for side labels
+    fig.update_xaxes(visible=False, range=[-xpad, W + xpad], fixedrange=True)
+    fig.update_yaxes(visible=False, range=[-pad, H + pad], scaleanchor="x", scaleratio=1, fixedrange=True)
+    fig.update_layout(height=height, margin=dict(l=0, r=0, t=10, b=10),
+                      plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", hovermode="closest")
+
+    if len(keep) > 1:
+        idx_traces = list(range(len(pallets))) + [i_text, i_air]
+        frames = []
+        for k in keep:
+            T = T_core_frames[k]
+            data = [dict(type="scatter", fillcolor=c) for c in colors(T)]
+            data.append(dict(type="scatter", text=labels(T), hovertext=hovers(T, times[k])))
+            data.append(dict(type="scatter", text=air_labels(T_out_frames[k])))
+            frames.append(go.Frame(name=str(k), data=data, traces=idx_traces))
+        fig.frames = frames
+        step_args = dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))
+        fig.update_layout(
+            sliders=[dict(active=0, x=0.12, len=0.86, y=0, yanchor="top", pad=dict(t=10, b=0),
+                          currentvalue=dict(prefix="Model time: ", suffix=" h", font=dict(size=13)),
+                          steps=[dict(method="animate", label=f"{times[k]:.1f}", args=[[str(k)], step_args])
+                                 for k in keep])],
+            updatemenus=[dict(type="buttons", direction="left", x=0.0, y=0, xanchor="left", yanchor="top",
+                              pad=dict(t=22), showactive=False, buttons=[
+                                  dict(label="▶", method="animate",
+                                       args=[None, dict(frame=dict(duration=80, redraw=True),
+                                                        fromcurrent=True, transition=dict(duration=0))]),
+                                  dict(label="❚❚", method="animate",
+                                       args=[[None], dict(mode="immediate", frame=dict(duration=0, redraw=False),
+                                                          transition=dict(duration=0))])])],
+            margin=dict(l=0, r=0, t=10, b=90), height=height + 80)
+    return fig
+
+
+def _arrows(inlet: str, W: float, H: float):
+    """Inlet/outlet arrow end points and label positions (x, y, textposition)."""
+    L, gap = 0.9, 0.35
+    if inlet in ("left", "right"):
+        sx = 1 if inlet == "left" else -1
+        xin = -gap if sx > 0 else W + gap
+        xout = W + gap if sx > 0 else -gap
+        y = H / 2
+        in_xy = ((xin - sx * L, y), (xin, y))
+        out_xy = ((xout, y), (xout + sx * L, y))
+        # anchor at the outer end of each arrow, text extending away from the cell
+        outer_in, outer_out = xin - sx * L, xout + sx * L
+        lab = [(outer_in, y + 0.25, "top left" if sx > 0 else "top right"),
+               (outer_out, y + 0.25, "top right" if sx > 0 else "top left")]
+    else:
+        sy = 1 if inlet == "bottom" else -1
+        yin = -gap if sy > 0 else H + gap
+        yout = H + gap if sy > 0 else -gap
+        x = W / 2
+        in_xy = ((x, yin - sy * L), (x, yin))
+        out_xy = ((x, yout), (x, yout + sy * L))
+        lab = [(x + 0.2, yin - sy * L / 2, "middle right"), (x + 0.2, yout + sy * L / 2, "middle right")]
+    return in_xy, out_xy, lab
 
 
 # ---- time series --------------------------------------------------------------
@@ -155,8 +192,7 @@ def extreme_positions(freeze_times_h: Sequence, final_T_core: Sequence[float]) -
     return order[0] + 1, order[-1] + 1
 
 
-def temperature_figure(res, T_target: float, cv: Callable, ul: Callable, t_mark: float | None = None,
-                       height: int = 420) -> go.Figure:
+def temperature_figure(res, T_target: float, cv: Callable, ul: Callable, height: int = 420) -> go.Figure:
     P = res.pallets
     final = P[P.time_h == P.time_h.max()].sort_values("position").T_core.tolist()
     cold, warm = extreme_positions(res.freeze_times_h, final)
@@ -176,11 +212,11 @@ def temperature_figure(res, T_target: float, cv: Callable, ul: Callable, t_mark:
     fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_air_out), name="Air out",
                              line=dict(color="#2b3a4a", dash="dashdot")))
     fig.add_hline(y=cv("temp", T_target), line_dash="dot", line_color="#888", annotation_text="Target")
-    _finish(fig, ul("temp"), t_mark, height)
+    _finish(fig, ul("temp"), height)
     return fig
 
 
-def power_figure(res, cv: Callable, ul: Callable, t_mark: float | None = None, height: int = 420) -> go.Figure:
+def power_figure(res, cv: Callable, ul: Callable, height: int = 420) -> go.Figure:
     C = res.cell
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", C.Q_cell_kW), name="Cooling power",
@@ -188,13 +224,11 @@ def power_figure(res, cv: Callable, ul: Callable, t_mark: float | None = None, h
     fan = C["fan_kW"] if "fan_kW" in C else np.zeros(len(C))
     fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", fan), name="Fan power",
                              line=dict(color="#e08a1e", width=2)))
-    _finish(fig, ul("power"), t_mark, height)
+    _finish(fig, ul("power"), height)
     return fig
 
 
-def _finish(fig, y_unit, t_mark, height):
-    if t_mark is not None:
-        fig.add_vline(x=t_mark, line_color="#888", line_width=1)
+def _finish(fig, y_unit, height):
     fig.update_layout(height=height, xaxis_title="Blasting time [h]", yaxis_title=y_unit,
                       margin=dict(l=10, r=10, t=10, b=10), hovermode="x unified",
                       legend=dict(orientation="h", y=-0.2))

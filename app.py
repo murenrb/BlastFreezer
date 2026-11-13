@@ -21,12 +21,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from blastfreezer import (CELL_FACES, PACKAGING_PRESETS, Air, CellSpec, Packaging, PalletLoad,
+from blastfreezer import (PACKAGING_PRESETS, Air, CellSpec, Packaging, PalletLoad,
                           Product, Scenario, SimSettings, simulate, summarize)
 from blastfreezer import units as U
-from blastfreezer.cell import OPPOSITE
 from blastfreezer.foods import CUSTOM, DEFAULT_FOOD, FOODS, product_kwargs
-from blastfreezer.viz import cell_figure, power_figure, temperature_figure
+from blastfreezer.viz import GUI_FACES, cell_figure, power_figure, temperature_figure
+
+FLOW_LABEL = {"left": "Left → right", "right": "Right → left", "bottom": "Bottom → top",
+              "top": "Top → bottom"}
 
 st.set_page_config(page_title="Blast Freezer Model", layout="wide")
 D = Scenario()
@@ -173,7 +175,7 @@ def document_height(n_rows: int) -> int:
     return 38 + 35 * n_rows
 
 
-def cell_tab() -> tuple[CellSpec, Air]:
+def cell_tab() -> tuple[CellSpec, float, float]:
     c1, c2 = st.columns(2, gap="medium")
     with c1:
         st.markdown("**Size (pallet positions)**")
@@ -182,58 +184,63 @@ def cell_tab() -> tuple[CellSpec, Air]:
         n_wide = islider("Wide", "n_wide", c.n_wide, 1, 10)
         n_high = islider("High", "n_high", c.n_high, 1, 8)
         st.caption(f"{n_deep * n_wide * n_high} pallet positions")
-        inlet = st.selectbox("Air enters through", CELL_FACES, index=CELL_FACES.index(c.inlet_face),
-                             key="w::inlet", format_func=lambda f: f"{f} → out {OPPOSITE[f]}")
     with c2:
         st.markdown("**Air**")
-        a = D.air
-        T_in = qw("slider", "Supply air temperature", "T_in", "temp", a.T_in, -50, -10)
-        flow = qw("slider", "Airflow per pallet", "flow", "flow", a.flow_per_pallet, 0.1, 5.0)
-        st.caption(f"Cell total {cv('flow', flow * n_deep * n_wide * n_high):,.1f} {ul('flow')}")
-        htc = qw("slider", "Surface HTC", "htc", "htc", a.htc, 5, 80)
-        ratio = qw("slider", "Spacer velocity, flow across spacers", "ratio", None, a.blocked_velocity_ratio,
-                   0.01, 1.0, si_scale=100, unit_label="% of free", step=1.0, format="%.0f")
-        n_exp = qw("slider", "HTC velocity exponent n (h ∝ vⁿ)", "n_exp", None, a.htc_velocity_exponent,
-                   0.3, 1.0, step=0.05)
-    return CellSpec(n_deep, n_wide, n_high, inlet), Air(T_in, flow, htc, ratio, n_exp, a.cp)
+        inlet = st.selectbox("Air flow direction", GUI_FACES, index=GUI_FACES.index(c.inlet_face),
+                             key="w::inlet", format_func=lambda f: FLOW_LABEL[f])
+        T_in = qw("slider", "Supply air temperature", "T_in", "temp", D.air.T_in, -50, -10)
+        flow = qw("slider", "Total airflow", "flow_total", "flow", D.air.flow_total, 1.0, 120.0,
+                  step=0.5 if units() == U.SI else 1000.0)
+        axis_n = {"left": n_wide, "right": n_wide, "bottom": n_high, "top": n_high}[inlet]
+        n_lanes = n_deep * n_wide * n_high // axis_n
+        st.caption(f"{n_lanes} lanes × {axis_n} pallets in series · "
+                   f"{cv('flow', flow / n_lanes):,.{2 if units() == U.SI else 0}f} {ul('flow')} per lane")
+    return CellSpec(n_deep, n_wide, n_high, inlet), T_in, flow
 
 
-def model_tab() -> SimSettings:
+def model_tab() -> tuple[SimSettings, float, float]:
     c1, c2 = st.columns(2, gap="medium")
-    s = D.sim
+    s, a = D.sim, D.air
     with c1:
         st.radio("Units", [U.SI, U.IP], horizontal=True, key="units")
+        st.markdown("**Heat transfer**")
+        htc = qw("slider", "Surface HTC", "htc", "htc", a.htc, 5, 80)
+        ratio = qw("slider", "Spacer air velocity when flow crosses spacers", "ratio", None,
+                   a.blocked_velocity_ratio, 0.01, 1.0, si_scale=100, unit_label="% of free", step=1.0,
+                   format="%.0f", help=f"Spacer HTC = HTC × ratio^{a.htc_velocity_exponent} when air "
+                                       "runs across the spacer channels (vertical flow).")
+    with c2:
+        st.markdown("**Solver**")
         n_nodes = islider("Nodes, core → surface", "nodes", s.n_nodes, 10, 100,
                           help="40 gives ~1–2 % freeze-time error.")
         st.selectbox("1-D geometry", ["auto", "plate", "sphere", "cylinder"], key="w::geom",
                      help="auto: plate if the block's smallest dimension is < 0.5× the middle one, "
                           "otherwise an equivalent sphere (R = 3V/A).")
-    with c2:
         t_max = qw("slider", "Max simulated time", "tmax", None, s.t_max_hours, 12, 500, unit_label="h",
                    step=12.0, format="%.0f")
         dt_max = qw("number", "Max time step", "dtmax", None, s.dt_max, 1, 600, unit_label="s", step=1.0,
                     format="%.0f", help="The solver uses the smaller of this and the stability limit.")
         rec = qw("number", "Output interval", "rec", None, s.record_every_s, 60, 3600, si_scale=1 / 60,
                  unit_label="min", step=1.0, format="%.0f", help="Resolution of the time slider and plots.")
-    return SimSettings(s.T_start, s.T_target, n_nodes, dt_max, t_max, rec)
+    return SimSettings(s.T_start, s.T_target, n_nodes, dt_max, t_max, rec), htc, ratio
 
 
 # ---------------------------------------------------------------- layout ----
-st.markdown("<style>div.block-container{padding-top:1.5rem}</style>", unsafe_allow_html=True)
 left, right = st.columns([5, 6], gap="large")
 
 with left:
     st.subheader("Inputs")
     t_pal, t_cell, t_model, t_boost = st.tabs(["Pallet", "Cell", "Model", "Boost"])
     with t_model:
-        sim = model_tab()
+        sim, htc, ratio = model_tab()
     with t_pal:
         product, pkg, load, T0, Tt = pallet_tab()
     with t_cell:
-        cell, air = cell_tab()
+        cell, T_in, flow_total = cell_tab()
     with t_boost:
         st.info("Boost inputs will go here.")
     sim.T_start, sim.T_target = T0, Tt
+    air = Air(T_in, flow_total, htc, ratio, D.air.htc_velocity_exponent, D.air.cp)
     scenario = Scenario(product, pkg, load, air, cell, sim)
 
     if load.use_spacers and pkg.package_height > load.height / (load.n_spacers + 1) * 1.001:
@@ -243,47 +250,35 @@ with left:
             with st.spinner("Solving…"):
                 res = simulate(scenario)
             ss["res"], ss["res_scn"] = res, scenario.to_dict()
-            ss["w::time"] = 0.0
         except ValueError as e:
             st.error(str(e))
 
 res = ss.get("res")
+if res is not None and Scenario.from_dict(ss["res_scn"]).cell.inlet_face not in GUI_FACES:
+    res = None                                    # solution from an older layout option
 shown = Scenario.from_dict(ss["res_scn"]) if res is not None else scenario
 stale = res is not None and ss["res_scn"] != scenario.to_dict()
 
 with right:
-    h1, h2 = st.columns([3, 2])
-    h1.subheader("Cell")
-    view = h2.radio("View", ["front", "side", "top"], horizontal=True, key="w::view",
-                    format_func=str.capitalize, label_visibility="collapsed")
+    st.subheader("Cell")
     if stale:
         st.info("Inputs changed since the last solve. Showing the last solution; click **Run solver** to update.")
-
     c = shown.cell
-    total_flow = shown.air.flow_per_pallet * c.n_pallets
-    flow_text = f"{cv('flow', total_flow):,.1f} {ul('flow')}"
+    flow_text = f"{cv('flow', shown.air.flow_total):,.1f} {ul('flow')}"
     if res is None:
-        times = [0.0]
-        n_ser = {"bottom": c.n_high, "top": c.n_high, "front": c.n_deep, "back": c.n_deep,
-                 "left": c.n_wide, "right": c.n_wide}[c.inlet_face]
-        T_series, T_out, t_sel = [shown.sim.T_start] * n_ser, None, None
+        n_ser = {"bottom": c.n_high, "top": c.n_high, "left": c.n_wide, "right": c.n_wide}[c.inlet_face]
+        T_frames, times, T_out = [[shown.sim.T_start] * n_ser], [0.0], [None]
     else:
-        times = [float(t) for t in res.cell.time_h]
-    fig_slot = st.empty()
-    if res is not None:
-        t_sel = st.select_slider("Model time", options=times, key="w::time",
-                                 format_func=lambda t: f"{t:.1f} h")
-        P = res.pallets[np.isclose(res.pallets.time_h, t_sel)].sort_values("position")
-        T_series = P.T_core.tolist()
-        T_out = float(res.cell.loc[np.isclose(res.cell.time_h, t_sel), "T_air_out"].iloc[0])
+        P = res.pallets.pivot(index="time_h", columns="position", values="T_core").sort_index()
+        T_frames, times = P.values, list(P.index)
+        T_out = res.cell.set_index("time_h").loc[P.index, "T_air_out"].tolist()
+    st.plotly_chart(
+        cell_figure(c.n_deep, c.n_wide, c.n_high, c.inlet_face, T_frames, times, T_out,
+                    shown.sim.T_start, shown.sim.T_target, cv, ul, shown.air.T_in, flow_text, height=480),
+        width="stretch", config={"displayModeBar": False}, key="cell_fig")
+    if res is None:
+        st.caption("Run the solver, then drag the time slider (or press ▶) to step through the blast.")
     else:
-        st.slider("Model time", 0.0, 1.0, 0.0, disabled=True, help="Run the solver first.")
-    fig_slot.plotly_chart(
-        cell_figure(c.n_deep, c.n_wide, c.n_high, c.inlet_face, T_series, shown.sim.T_start,
-                    shown.sim.T_target, cv, ul, shown.air.T_in, T_out, flow_text, view=view, height=500),
-        width="stretch", config={"displayModeBar": False})
-
-    if res is not None:
         summ = summarize(res, shown)
         m = st.columns(4)
         fmt_h = lambda t: "—" if t is None else f"{t:.1f} h"
@@ -302,11 +297,11 @@ if res is None:
         t.info("Run the solver to see the time series.")
 else:
     with t_temp:
-        st.plotly_chart(temperature_figure(res, shown.sim.T_target, cv, ul, t_mark=t_sel), width="stretch")
+        st.plotly_chart(temperature_figure(res, shown.sim.T_target, cv, ul), width="stretch")
         st.caption("Warmest / coldest = last / first pallet to reach the target. "
                    "Surface node = outermost finite volume.")
     with t_pow:
-        st.plotly_chart(power_figure(res, cv, ul, t_mark=t_sel), width="stretch")
+        st.plotly_chart(power_figure(res, cv, ul), width="stretch")
         st.caption("Fan power is not modeled yet.")
 
     with st.expander("Model details & data"):

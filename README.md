@@ -22,9 +22,10 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 ## GUI
 
 - Upper left: inputs in tabs (Pallet, Cell, Model, Boost) and **Run solver**.
-- Upper right: the cell, one square per pallet position, coloured by core temperature from the
-  load-in temperature (red) to the target (blue), with the inlet/outlet air arrows. Front / side /
-  top views; hover shows every pallet in the depth stack. The slider steps through the solution.
+- Upper right: the cell (front view), one square per pallet position, coloured by core temperature
+  from the load-in temperature (red) to the target (blue), with the inlet/outlet air arrows
+  (left/right or bottom/top). The time slider and play button run in the browser, so the cell
+  updates while dragging.
 - Bottom: Temperature (warmest and coldest pallet core and surface node, air in and out) and
   Power (cooling, fan) time series.
 
@@ -44,7 +45,7 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 - Grid of pallet positions (deep x wide x high). Air enters one face and leaves the opposite one
   in straight lanes; pallets in a lane are solved in flow order, each one's air-out feeding the
   next one's air-in.
-- Total airflow = airflow per pallet x number of pallets, split evenly across lanes.
+- Total cell airflow is an input, split evenly across lanes.
 - Flow along spacer channels uses the surface HTC; flow across them (vertical, or across one-way
   channels) reduces spacer velocity by a ratio (default 0.1) with h proportional to v^n (n = 0.8).
 - Runs until every pallet core reaches the target.
@@ -70,12 +71,12 @@ Single pallet and series-flow cell in place.
 
 ## Current assumptions / deferred items
 
-- Inlet air temperature is constant and evenly distributed. Airflow per pallet is an input;
-  later it will come from a fan input split evenly per lane.
+- Inlet air temperature is constant and evenly distributed. Total airflow is an input; later it
+  will come from a fan input. It is split evenly per lane.
 - Air moves in straight lines from the inlet face to the opposite face (no turns).
 - Spacer channels are open in both horizontal directions by default.
 - Surface HTC is a constant input (better sources pending); only the across-spacer velocity
-  drop changes it.
+  drop changes it (h ∝ v^0.8, exponent fixed in code).
 - With spacers, pallet side faces are ignored (conservative, especially for flow across spacers).
 - All pallets start at the load-in temperature at t = 0, so the peak load is an initial spike.
   Loading time and coil/refrigeration limits come with the coil model.

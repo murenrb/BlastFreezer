@@ -60,7 +60,7 @@ def air_path(s: Scenario) -> AirPath:
         alignment = "across channels"
         h = a.htc * a.blocked_velocity_ratio ** a.htc_velocity_exponent
 
-    flow_total = a.flow_per_pallet * c.n_pallets
+    flow_total = a.flow_total
     m_dot_total = air_density(a.T_in) * flow_total
     return AirPath(axis, c.inlet_face, OPPOSITE[c.inlet_face], n_series, n_lanes, alignment, h,
                    flow_total, m_dot_total, m_dot_total / n_lanes)

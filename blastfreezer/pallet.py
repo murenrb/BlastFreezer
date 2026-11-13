@@ -39,7 +39,7 @@ def air_density(T_c: float) -> float:
 class Pallet:
     def __init__(self, s: Scenario, name: str = "pallet", T_in: float | None = None,
                  m_dot: float | None = None, h: float | None = None):
-        """Standalone defaults: inlet = cell inlet, flow = flow_per_pallet, h = free-flow HTC."""
+        """Standalone defaults: inlet = cell inlet, all of the cell airflow, h = free-flow HTC."""
         self.s = s
         self.name = name
         self.body: Body = representative_body(s.load)
@@ -59,7 +59,7 @@ class Pallet:
 
         T_in = s.air.T_in if T_in is None else T_in
         if m_dot is None:
-            m_dot = air_density(s.air.T_in) * s.air.flow_per_pallet
+            m_dot = air_density(s.air.T_in) * s.air.flow_total
         self.set_air(T_in, m_dot, s.air.htc if h is None else h)
         self.dt_stable = self._stable_dt()
 
