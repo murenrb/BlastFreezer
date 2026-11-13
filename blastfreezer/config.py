@@ -99,10 +99,10 @@ CELL_FACES = ("bottom", "top", "front", "back", "left", "right")
 class Cell:
     """Cartesian grid of pallet positions (PPs). Air enters one face, leaves the opposite one."""
 
-    n_deep: int = 2
-    n_wide: int = 4
+    n_deep: int = 4
+    n_wide: int = 2
     n_high: int = 4
-    inlet_face: str = "bottom"
+    inlet_face: str = "left"
 
     @property
     def n_pallets(self) -> int:
