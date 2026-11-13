@@ -1,0 +1,19 @@
+# Legacy scripts and client data - keep out of the (public) repo
+Old Sources/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# OS / OneDrive junk
+.DS_Store
+Icon?
+*.tmp
+~$*
