@@ -97,6 +97,7 @@ def test_time_series_figures_build():
     s = Scenario()
     s.load.use_spacers = True
     s.cell.n_deep, s.cell.n_wide, s.cell.n_high = 1, 1, 3
+    s.cell.inlet_face = "bottom"          # 3 pallets in series -> distinct warmest / coldest
     r = simulate(s)
     assert len(temperature_figure(r, s.sim.T_target, cv, ul).data) == 6
     assert len(power_figure(r, cv, ul).data) == 2
