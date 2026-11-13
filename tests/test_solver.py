@@ -13,9 +13,8 @@ import numpy as np
 import pytest
 from scipy.optimize import brentq
 
-from blastfreezer import (Pallet, Scenario, simulate, summarize)
+from blastfreezer import Pallet, Scenario
 from blastfreezer.geometry import representative_body
-from blastfreezer.solver import HISTORY_COLUMNS
 
 
 def _solid_block_scenario(shape: str, dims, n_nodes=40, T_freeze=-200.0, water=0.0,
@@ -26,6 +25,7 @@ def _solid_block_scenario(shape: str, dims, n_nodes=40, T_freeze=-200.0, water=0
     rho = 1000.0
     s.product.density = rho
     s.product.water_fraction = water
+    s.product.bound_water_fraction = 0.0
     s.product.T_freeze = T_freeze
     s.product.cp_unfrozen = 3000.0
     s.product.cp_frozen = cp_frozen
@@ -109,30 +109,33 @@ def test_energy_conserved_exactly():
     assert abs(p.energy_balance_error) < 1e-9
 
 
-def test_default_scenario_runs_and_freezes():
+def test_standalone_pallet_core_and_front_monotonic():
     s = Scenario()
-    r = simulate(s)
-    su = summarize(r, s)
-    assert list(r.history.columns) == HISTORY_COLUMNS
-    assert su["reached_target"]
-    assert su["frozen_fraction_end"] == pytest.approx(1.0)
-    assert (r.history["T_core"].diff().dropna() <= 1e-9).all()
-    assert (r.history["front_depth_mm"].diff().dropna() >= -1e-9).all()
+    s.load.use_spacers = True
+    p = Pallet(s)
+    T_prev, d_prev = p.T_core, p.front_depth
+    while p.t_frozen is None:
+        p.step(p.dt_stable)
+        assert p.T_core <= T_prev + 1e-9 and p.front_depth >= d_prev - 1e-9
+        T_prev, d_prev = p.T_core, p.front_depth
+    assert p.frozen_fraction == pytest.approx(1.0)
 
 
 def test_spacer_geometry():
-    s = Scenario()  # legacy: 2.0 m stack, 6 spacers of 30 mm
+    s = Scenario()
+    s.load.use_spacers = True     # 1.2 m of product, 6 spacers -> 7 layers
     b = representative_body(s.load)
     assert b.shape == "plate" and b.n_layers == 7
-    assert b.R == pytest.approx((2.0 - 6 * 0.03) / 7 / 2)
+    assert b.R == pytest.approx(1.2 / 7 / 2)
     assert b.area_pallet == pytest.approx(2 * 1.02 * 1.22 * 7)
+    assert s.load.stack_height == pytest.approx(1.2 + 6 * 0.03)
 
 
 def test_sphere_radius_is_3V_over_A():
     s = Scenario()
     s.load.use_spacers = False
     b = representative_body(s.load)
-    L, W, H = 1.02, 1.22, 2.0
+    L, W, H = 1.02, 1.22, 1.2
     assert b.shape == "sphere"
     assert b.R == pytest.approx(3 * L * W * H / (2 * (L * W + W * H + L * H)))
 

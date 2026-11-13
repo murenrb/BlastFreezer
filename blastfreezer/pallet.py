@@ -2,15 +2,16 @@
 
 Grid: cell-centred, fixed. Cell 0 is the core (symmetry / zero flux), cell
 N-1 is at the surface. Conductance between neighbours uses the series
-(harmonic) combination of the two half-cells; the surface cell connects to
-the air through its half-cell plus the effective air-side film.
+(harmonic) combination of the two half-cells. The surface cell connects to
+the air through its half-cell, the packaging surface resistance (boxes), and
+the effective air film.
 
 Air side: the pallet sees air at T_in with mass flow m_dot. With a uniform
 surface temperature, the heat removed is
     Q = eps * m_dot * cp * (T_surface - T_in),   eps = 1 - exp(-NTU),
     NTU = h * A / (m_dot * cp),
-which is the same as a film coefficient h_eff = eps * m_dot * cp / A applied
-against T_in. Air leaving the pallet is T_out = T_in + Q / (m_dot * cp).
+which equals a film coefficient h_eff = eps * m_dot * cp / A against T_in.
+Air leaving the pallet is T_out = T_in + Q / (m_dot * cp).
 
 The freezing front is not a grid feature. Its position is the depth from the
 surface that holds the current frozen volume, sum(f_i * V_i).
@@ -31,12 +32,20 @@ P_ATM = 101_325.0       # Pa
 STABILITY_SAFETY = 0.9
 
 
+def air_density(T_c: float) -> float:
+    return P_ATM / (R_AIR * (T_c + 273.15))
+
+
 class Pallet:
-    def __init__(self, s: Scenario):
+    def __init__(self, s: Scenario, name: str = "pallet", T_in: float | None = None,
+                 m_dot: float | None = None, h: float | None = None):
+        """Standalone defaults: inlet = cell inlet, flow = flow_per_pallet, h = free-flow HTC."""
         self.s = s
+        self.name = name
         self.body: Body = representative_body(s.load)
         self.grid: Grid = make_grid(self.body.shape, self.body.R, s.sim.n_nodes)
-        self.mat: Material = build_material(s.product, s.packaging, s.load.mass, self.body.volume_pallet)
+        self.mat: Material = build_material(s.product, s.packaging, s.load.mass,
+                                            self.body.volume_pallet, self.body.R)
         # unit-body -> whole-pallet multiplier (same for areas and volumes by construction)
         self.scale = self.body.area_pallet / self.grid.A_surface
 
@@ -44,22 +53,28 @@ class Pallet:
         self.H0_total = self._total_enthalpy()
         self.t = 0.0
         self.E_removed = 0.0      # J, cumulative heat removed from the pallet
-        self.Q = 0.0              # W, last step
-        self.T_air_in = s.air.T_in
-        self.set_air(s.air.T_in, s.air.flow_per_pallet)
+        self.Q = 0.0              # W, during the last step
+        self.T_air_out_step = None
+        self.t_frozen = None      # s, when the core first reached T_target
+
+        T_in = s.air.T_in if T_in is None else T_in
+        if m_dot is None:
+            m_dot = air_density(s.air.T_in) * s.air.flow_per_pallet
+        self.set_air(T_in, m_dot, s.air.htc if h is None else h)
         self.dt_stable = self._stable_dt()
 
-    # ---- setup ------------------------------------------------------------
-    def set_air(self, T_in: float, flow_m3s: float):
-        """Set inlet air conditions (the cell model will call this every step later)."""
-        a = self.s.air
+    # ---- air side ---------------------------------------------------------
+    def set_air(self, T_in: float, m_dot: float, h: float):
+        """Set inlet air for the next step. The cell calls this every step."""
         self.T_air_in = T_in
-        rho = P_ATM / (R_AIR * (T_in + 273.15))
-        self.m_dot = rho * flow_m3s
-        self.C_air = self.m_dot * a.cp                              # W/K
-        self.NTU = a.htc * self.body.area_pallet / self.C_air if self.C_air > 0 else math.inf
-        self.eps = 1.0 - math.exp(-self.NTU)
-        self.h_eff = self.eps * self.C_air / self.body.area_pallet if self.C_air > 0 else a.htc
+        if (getattr(self, "m_dot", None), getattr(self, "h", None)) != (m_dot, h):
+            self.m_dot, self.h = m_dot, h
+            self.C_air = m_dot * self.s.air.cp                              # W/K
+            A = self.body.area_pallet
+            self.NTU = h * A / self.C_air if self.C_air > 0 else math.inf
+            self.eps = 1.0 - math.exp(-self.NTU)
+            self.h_eff = self.eps * self.C_air / A if self.C_air > 0 else h
+            self.R_film = 1.0 / self.h_eff + self.mat.R_surface             # m^2-K/W outside the product
 
     def _stable_dt(self) -> float:
         """Explicit Euler limit: dt <= V_i * C_min / sum(G_i) for every cell."""
@@ -68,7 +83,7 @@ class Pallet:
         G_int = g.A_faces[1:-1] * k / g.dx
         G[:-1] += G_int
         G[1:] += G_int
-        G[-1] += g.A_surface / (g.dx / (2 * k) + 1.0 / self.h_eff)
+        G[-1] += g.A_surface / (g.dx / (2 * k) + self.R_film)
         return STABILITY_SAFETY * float(np.min(g.V_cells * self.mat.C_min / G))
 
     # ---- time stepping ----------------------------------------------------
@@ -80,8 +95,7 @@ class Pallet:
 
         R_int = g.dx / (2 * k[:-1]) + g.dx / (2 * k[1:])
         q_int = g.A_faces[1:-1] / R_int * (T[:-1] - T[1:])              # W outward, per unit body
-        G_s = g.A_surface / (g.dx / (2 * k[-1]) + 1.0 / self.h_eff)
-        q_s = G_s * (T[-1] - self.T_air_in)                               # W to air, per unit body
+        q_s = g.A_surface / (g.dx / (2 * k[-1]) + self.R_film) * (T[-1] - self.T_air_in)
 
         net = np.zeros(g.n)
         net[:-1] -= q_int
@@ -90,9 +104,11 @@ class Pallet:
         self.H = self.H + dt * net / g.V_cells
 
         self.Q = q_s * self.scale
-        self._q_s_unit, self._k_surf, self._T_surf_cell = q_s, k[-1], T[-1]
+        self.T_air_out_step = self.T_air_in + self.Q / self.C_air
         self.E_removed += self.Q * dt
         self.t += dt
+        if self.t_frozen is None and self.T_core <= self.s.sim.T_target:
+            self.t_frozen = self.t
         return self.Q
 
     # ---- derived quantities ----------------------------------------------
@@ -109,24 +125,31 @@ class Pallet:
 
     @property
     def T_core(self) -> float:
-        return float(self.T_nodes[0])
+        H0 = self.H[0]
+        m = self.mat
+        if H0 < 0:
+            return m.T_freeze + H0 / m.C_frozen
+        if H0 > m.L_vol:
+            return m.T_freeze + (H0 - m.L_vol) / m.C_unfrozen
+        return m.T_freeze
+
+    def _surface_flux(self, T, f) -> float:
+        """Heat flow to the air at the current state, per unit body [W]."""
+        k = self.mat.k(f[-1])
+        return self.grid.A_surface / (self.grid.dx / (2 * k) + self.R_film) * (T[-1] - self.T_air_in)
 
     @property
     def T_surface(self) -> float:
+        """Product surface temperature (inside any surface packaging)."""
         T, f = self.mat.state(self.H)
-        q = self._current_surface_flux(T, f)
+        q = self._surface_flux(T, f)
         return float(T[-1] - q / self.grid.A_surface * self.grid.dx / (2 * self.mat.k(f[-1])))
-
-    def _current_surface_flux(self, T, f) -> float:
-        k = self.mat.k(f[-1])
-        G_s = self.grid.A_surface / (self.grid.dx / (2 * k) + 1.0 / self.h_eff)
-        return G_s * (T[-1] - self.T_air_in)
 
     @property
     def Q_now(self) -> float:
-        """Heat removal rate at the current state [W]."""
+        """Heat removal rate at the current state and current inlet air [W]."""
         T, f = self.mat.state(self.H)
-        return self._current_surface_flux(T, f) * self.scale
+        return self._surface_flux(T, f) * self.scale
 
     @property
     def T_mean(self) -> float:

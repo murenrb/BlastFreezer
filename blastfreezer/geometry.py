@@ -43,9 +43,7 @@ class Body:
 def representative_body(load: PalletLoad) -> Body:
     if load.use_spacers and load.n_spacers > 0:
         n_layers = load.n_spacers + 1
-        h_block = (load.height - load.n_spacers * load.spacer_thickness) / n_layers
-        if h_block <= 0:
-            raise ValueError("Spacers take up the whole stack height.")
+        h_block = load.height / n_layers      # height is product only; spacers sit between layers
     else:
         n_layers = 1
         h_block = load.height
