@@ -5,10 +5,12 @@ Streamlit app for transient modeling of a blast freezing cell.
 ## Layout
 
 ```
-app.py                  Streamlit UI (inputs, plots, downloads)
+app.py                  Streamlit GUI: tabbed inputs, cell view with time slider, time series
 blastfreezer/
   config.py             Input dataclasses (Product, Packaging, PalletLoad, Air, Cell, SimSettings)
   units.py              SI <-> Imperial display conversions (model is SI internally)
+  foods.py              Product property library (ASHRAE / proposal generator, Choi-Okos k and density)
+  viz.py                Plotly figures: cell view, temperature and power time series
   cell.py               Cell of pallet positions; lanes of pallets in series along the airflow
   geometry.py           Pallet -> 1-D representative body (plate / sphere / cylinder) + FV grid
   materials.py          Homogenized packed-product properties, enthalpy <-> temperature
@@ -16,6 +18,15 @@ blastfreezer/
   solver.py             simulate(scenario) -> Result(cell, pallets, profiles, freeze_times_h, info)
 tests/                  Verification vs. analytic conduction, Plank's equation, energy balance
 ```
+
+## GUI
+
+- Upper left: inputs in tabs (Pallet, Cell, Model, Boost) and **Run solver**.
+- Upper right: the cell, one square per pallet position, coloured by core temperature from the
+  load-in temperature (red) to the target (blue), with the inlet/outlet air arrows. Front / side /
+  top views; hover shows every pallet in the depth stack. The slider steps through the solution.
+- Bottom: Temperature (warmest and coldest pallet core and surface node, air in and out) and
+  Power (cooling, fan) time series.
 
 ## Model
 

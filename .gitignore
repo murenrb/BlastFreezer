@@ -17,3 +17,6 @@ venv/
 Icon?
 *.tmp
 ~$*
+
+# IDE
+.idea/

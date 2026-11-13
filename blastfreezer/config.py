@@ -1,8 +1,8 @@
 """Input definitions for a blast freezer simulation.
 
 Everything the solver needs lives in these dataclasses. The Streamlit UI fills
-them in; the physics only reads them. Defaults come from the legacy Tar Heel
-scripts (Old Sources/TPHL - Tar Heel.py) or were confirmed by the user.
+them in; the physics only reads them. Product defaults come from foods.py;
+other defaults from the legacy scripts or confirmed by the user.
 
 Units: SI throughout (m, kg, s, W, J), temperatures in degC.
 """
@@ -11,21 +11,26 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
+from .foods import DEFAULT_FOOD, product_kwargs
+
+
+_D = product_kwargs(DEFAULT_FOOD)       # default product: beef carcass (choice), see foods.py
+
 
 @dataclass
 class Product:
     """Thermal properties of the product itself (not the packed bulk)."""
 
-    name: str = "Legacy Tar Heel product"
-    water_fraction: float = 0.57           # total water, mass fraction of product [-]
-    bound_water_fraction: float = 0.05     # fraction of that water that never freezes [-]
-    cp_unfrozen: float = 2470.0            # J/kg-K
-    cp_frozen: float = 1470.0              # J/kg-K
-    k_unfrozen: float = 0.50               # W/m-K
-    k_frozen: float = 1.40                 # W/m-K
-    density: float = 1050.0                # kg/m^3, solid product, no voids
-    T_freeze: float = -1.9                 # degC, initial freezing point
-    latent_heat_water: float = 334_000.0   # J/kg of water
+    name: str = _D["name"]
+    water_fraction: float = _D["water_fraction"]     # total water, mass fraction of product [-]
+    bound_water_fraction: float = 0.05               # fraction of that water that never freezes [-]
+    cp_unfrozen: float = _D["cp_unfrozen"]           # J/kg-K
+    cp_frozen: float = _D["cp_frozen"]               # J/kg-K
+    k_unfrozen: float = _D["k_unfrozen"]             # W/m-K
+    k_frozen: float = _D["k_frozen"]                 # W/m-K
+    density: float = _D["density"]                   # kg/m^3, solid product, no voids
+    T_freeze: float = _D["T_freeze"]                 # degC, initial freezing point
+    latent_heat_water: float = 334_000.0             # J/kg of water
 
 
 @dataclass

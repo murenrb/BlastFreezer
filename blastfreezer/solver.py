@@ -10,7 +10,7 @@ import pandas as pd
 from .cell import Cell
 from .config import Scenario
 
-CELL_COLUMNS = ["time_h", "T_air_in", "T_air_out", "Q_cell_kW", "n_frozen_positions"]
+CELL_COLUMNS = ["time_h", "T_air_in", "T_air_out", "Q_cell_kW", "fan_kW", "n_frozen_positions"]
 PALLET_COLUMNS = ["time_h", "position", "T_core", "T_surface", "T_mean", "T_air_in", "T_air_out",
                   "Q_kW", "frozen_fraction", "front_depth_mm"]
 
@@ -40,7 +40,7 @@ def simulate(s: Scenario) -> Result:
         th = cell.t / 3600.0
         times.append(th)
         n_frozen = sum(p.t_frozen is not None for p in lane.pallets)
-        cell_rows.append((th, s.air.T_in, cell.T_air_out, cell.Q / 1000.0, n_frozen))
+        cell_rows.append((th, s.air.T_in, cell.T_air_out, cell.Q / 1000.0, 0.0, n_frozen))  # fans: TBD
         for i, p in enumerate(lane.pallets):
             Q = p.Q_now if initial else p.Q
             T_out = p.T_air_out if initial else p.T_air_out_step

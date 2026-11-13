@@ -3,3 +3,6 @@ runOnSave = true
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+primaryColor = "#5fb84a"

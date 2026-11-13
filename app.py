@@ -1,8 +1,13 @@
-"""Streamlit front end for the blast freezer model.
+"""Blast freezer cell model: Streamlit GUI.
 
 Run with:  streamlit run app.py
 
-All inputs are stored in SI (st.session_state["si::<id>"]). Widgets show the
+Layout (see "gui example.png"):
+  upper left   tabbed inputs (Pallet / Cell / Model / Boost) + Run solver
+  upper right  cell view coloured by core temperature, airflow arrows, time slider
+  bottom       time series of the run (Temperature / Power)
+
+All inputs are stored in SI in st.session_state["si::<id>"]. Widgets show the
 selected unit system and convert on the way in and out, so switching units
 keeps the values.
 """
@@ -12,13 +17,16 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 from blastfreezer import (CELL_FACES, PACKAGING_PRESETS, Air, CellSpec, Packaging, PalletLoad,
-                          Product, Scenario, SimSettings, air_path, simulate, summarize)
+                          Product, Scenario, SimSettings, simulate, summarize)
 from blastfreezer import units as U
-from blastfreezer.geometry import representative_body
+from blastfreezer.cell import OPPOSITE
+from blastfreezer.foods import CUSTOM, DEFAULT_FOOD, FOODS, product_kwargs
+from blastfreezer.viz import cell_figure, power_figure, temperature_figure
 
 st.set_page_config(page_title="Blast Freezer Model", layout="wide")
 D = Scenario()
@@ -30,34 +38,7 @@ def units() -> str:
     return ss.get("units", U.SI)
 
 
-def qin(label: str, qid: str, q: str | None, default_si: float, lo_si: float, hi_si: float,
-        si_scale: float = 1.0, **kw) -> float:
-    """Number input shown in the active unit system; returns SI.
-
-    si_scale converts the stored SI value to the quantity's SI display unit
-    (e.g. 1000 for metres shown as mm).
-    """
-    sys_ = units()
-    key_si = f"si::{qid}"
-    if key_si not in ss:
-        ss[key_si] = default_si
-    if q is None:
-        v = st.number_input(label, float(lo_si), float(hi_si), float(ss[key_si]), key=f"w::{qid}", **kw)
-        ss[key_si] = v
-        return v
-    conv = lambda v: float(U.to_disp(q, v * si_scale, sys_))
-    v = st.number_input(f"{label} [{U.unit(q, sys_)}]", conv(lo_si), conv(hi_si), conv(ss[key_si]),
-                        float(U.step(q, sys_)), format=U.fmt(q, sys_), key=f"w::{qid}::{sys_}", **kw)
-    ss[key_si] = U.from_disp(q, v, sys_) / si_scale
-    return ss[key_si]
-
-
-def iin(label: str, qid: str, default: int, lo: int, hi: int, **kw) -> int:
-    return int(st.number_input(label, lo, hi, default, 1, key=f"w::{qid}", **kw))
-
-
 def cv(q: str, v):
-    """SI -> display."""
     return U.to_disp(q, v, units())
 
 
@@ -65,279 +46,296 @@ def ul(q: str) -> str:
     return U.unit(q, units())
 
 
+def qw(kind: str, label: str, qid: str, q: str | None, default_si: float, lo_si: float, hi_si: float,
+       si_scale: float = 1.0, step: float | None = None, unit_label: str = "", **kw) -> float:
+    """Slider or number input in the active unit system; returns SI.
+
+    q=None means no physical unit; si_scale then scales for display (e.g. 100 for %).
+    For q='small', si_scale=1000 shows metres as mm in SI.
+    """
+    sys_ = units()
+    key_si = f"si::{qid}"
+    if key_si not in ss:
+        ss[key_si] = default_si
+    if q is None:
+        conv = lambda v: float(v * si_scale)
+        back = lambda v: v / si_scale
+        lab = f"{label} [{unit_label}]" if unit_label else label
+        stp = step if step is not None else 0.01 * si_scale
+        fmt = kw.pop("format", "%.2f")
+    else:
+        conv = lambda v: float(U.to_disp(q, v * si_scale, sys_))
+        back = lambda v: U.from_disp(q, v, sys_) / si_scale
+        lab = f"{label} [{U.unit(q, sys_)}]"
+        stp = step if step is not None else U.step(q, sys_)
+        fmt = kw.pop("format", U.fmt(q, sys_))
+    lo, hi = sorted((conv(lo_si), conv(hi_si)))
+    val = min(max(conv(ss[key_si]), lo), hi)
+    widget = st.slider if kind == "slider" else st.number_input
+    v = widget(lab, lo, hi, val, float(stp), format=fmt, key=f"w::{qid}::{sys_}", **kw)
+    # write back only on a real change, so unit round-trips don't perturb stored SI values
+    if not np.isclose(v, conv(ss[key_si]), rtol=1e-9, atol=1e-12):
+        ss[key_si] = back(v)
+    return ss[key_si]
+
+
+def islider(label: str, qid: str, default: int, lo: int, hi: int, **kw) -> int:
+    return int(st.slider(label, lo, hi, default, 1, key=f"w::{qid}", **kw))
+
+
 # ---------------------------------------------------------------- inputs ----
-def sidebar_inputs() -> Scenario:
-    sb = st.sidebar
-    sb.radio("Units", [U.SI, U.IP], horizontal=True, key="units")
+def pallet_tab() -> tuple[Product, Packaging, PalletLoad, float, float]:
+    c1, c2 = st.columns(2, gap="medium")
+    with c1:
+        st.markdown("**Product**")
+        names = list(FOODS) + [CUSTOM]
+        choice = st.selectbox("Product", names, index=names.index(DEFAULT_FOOD), key="w::product",
+                              label_visibility="collapsed")
+        if choice != CUSTOM:
+            ss["custom_base"] = choice
+            props = product_kwargs(choice)
+            food = FOODS[choice]
+            rows = [("Water content", f"{props['water_fraction']:.1%}"),
+                    (f"cp unfrozen [{ul('cp')}]", f"{cv('cp', props['cp_unfrozen']):.3g}"),
+                    (f"cp frozen [{ul('cp')}]", f"{cv('cp', props['cp_frozen']):.3g}"),
+                    (f"k unfrozen [{ul('k')}]", f"{cv('k', props['k_unfrozen']):.3f}"),
+                    (f"k frozen [{ul('k')}]", f"{cv('k', props['k_frozen']):.3f}"),
+                    (f"Density [{ul('density')}]", f"{cv('density', props['density']):.0f}"),
+                    (f"Initial freezing point [{ul('temp')}]", f"{cv('temp', props['T_freeze']):.1f}")]
+            st.dataframe(pd.DataFrame(rows, columns=["Property", "Value"]), hide_index=True,
+                         width="stretch", height=document_height(len(rows)))
+            st.caption(f"Source: {food.source}" + ("  ⚠️ estimated" if food.estimated else ""))
+        else:
+            base = ss.get("custom_base", DEFAULT_FOOD)
+            b = product_kwargs(base)
+            st.caption(f"Starting from {base}")
+            k = f"cust_{base}_"
+            props = dict(
+                name=f"Custom ({base})",
+                water_fraction=qw("number", "Water content", k + "xw", None, b["water_fraction"], 0, 1,
+                                  si_scale=100, unit_label="%", step=0.5, format="%.1f"),
+                cp_unfrozen=qw("number", "cp unfrozen", k + "cpu", "cp", b["cp_unfrozen"], 500, 5000),
+                cp_frozen=qw("number", "cp frozen", k + "cpf", "cp", b["cp_frozen"], 500, 5000),
+                k_unfrozen=qw("number", "k unfrozen", k + "ku", "k", b["k_unfrozen"], 0.05, 3),
+                k_frozen=qw("number", "k frozen", k + "kf", "k", b["k_frozen"], 0.05, 3),
+                density=qw("number", "Density (solid)", k + "rho", "density", b["density"], 300, 2000),
+                T_freeze=qw("number", "Initial freezing point", k + "Tf", "temp", b["T_freeze"], -10, 0),
+            )
+        bound = qw("slider", "Bound (unfreezable) water", "xb", None, D.product.bound_water_fraction, 0, 0.3,
+                   si_scale=100, unit_label="% of water", step=1.0, format="%.0f")
+        product = Product(bound_water_fraction=bound, **props)
 
-    with sb.expander("Cell", expanded=True):
-        c = D.cell
-        st.caption("Size in pallet positions (PPs)")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            n_deep = iin("Deep", "n_deep", c.n_deep, 1, 50)
-        with c2:
-            n_wide = iin("Wide", "n_wide", c.n_wide, 1, 50)
-        with c3:
-            n_high = iin("High", "n_high", c.n_high, 1, 20)
-        inlet = st.selectbox("Air enters through", CELL_FACES, index=CELL_FACES.index(c.inlet_face),
-                             key="w::inlet")
-        cell = CellSpec(n_deep, n_wide, n_high, inlet)
-
-    with sb.expander("Air", expanded=True):
-        a = D.air
-        T_in = qin("Supply air temperature", "T_in", "temp", a.T_in, -60, 0)
-        flow = qin("Airflow per pallet", "flow", "flow", a.flow_per_pallet, 0.01, 20)
-        st.caption(f"Cell total: {cv('flow', flow * cell.n_pallets):,.1f} {ul('flow')}")
-        htc = qin("Surface HTC, free airflow", "htc", "htc", a.htc, 1, 200)
-        ratio = qin("Spacer velocity ratio, flow across spacers", "ratio", None,
-                    a.blocked_velocity_ratio, 0.01, 1.0, step=0.01,
-                    help="Velocity in the spacers relative to free flow when air runs across them.")
-        n_exp = qin("HTC velocity exponent n (h ∝ vⁿ)", "n_exp", None, a.htc_velocity_exponent,
-                    0.3, 1.0, step=0.05, help="0.8 turbulent, 0.5 laminar.")
-        air = Air(T_in, flow, htc, ratio, n_exp, a.cp)
-
-    with sb.expander("Pallet", expanded=True):
-        l = D.load
-        mass = qin("Product mass", "mass", "mass", l.mass, 10, 3000)
-        length = qin("Depth", "length", "length", l.length, 0.1, 3)
-        width = qin("Width", "width", "length", l.width, 0.1, 3)
-        height = qin("Product height (excl. spacers)", "height", "length", l.height, 0.1, 4)
-        use_sp = st.checkbox("Blast spacers between layers", l.use_spacers, key="w::use_sp")
-        n_sp = iin("Number of spacer layers", "n_sp", l.n_spacers, 1, 30, disabled=not use_sp)
-        t_sp = qin("Spacer thickness", "t_sp", "small", l.spacer_thickness, 0.001, 0.2, si_scale=1000,
-                   disabled=not use_sp)
-        channels = st.selectbox("Spacer channels open along", ["both", "depth", "width"],
-                                key="w::channels", disabled=not use_sp,
-                                format_func={"both": "Depth and width", "depth": "Depth only",
-                                             "width": "Width only"}.get)
-        geom = st.selectbox("1-D geometry", ["auto", "plate", "sphere", "cylinder"], key="w::geom",
-                            help="auto: plate if the block's smallest dimension is < 0.5× the "
-                                 "middle one, otherwise an equivalent sphere (R = 3V/A).")
-        load = PalletLoad(mass, length, width, height, use_sp, n_sp, t_sp, channels, geom)
-
-    with sb.expander("Packaging", expanded=False):
-        kind = st.selectbox("Type", list(PACKAGING_PRESETS), key="w::pkg")
+        st.markdown("**Packaging**")
+        kind = st.selectbox("Packaging", list(PACKAGING_PRESETS), key="w::pkg", label_visibility="collapsed")
         pre = PACKAGING_PRESETS[kind]
-        pkg = Packaging(
-            kind=kind,
-            package_height=qin("Package height (heat-flow direction)", "pkg_h", "length",
-                               D.packaging.package_height, 0.01, 2),
-            wall_thickness=qin("Wall thickness", f"wt_{kind}", "small", pre["wall_thickness"], 0, 0.02,
-                               si_scale=1000),
-            k_wall=qin("Wall conductivity", f"kw_{kind}", "k", pre["k_wall"], 0.001, 1),
-            wall_density=qin("Wall density", f"rw_{kind}", "density", pre["wall_density"], 0, 2000),
-            cp_wall=pre["cp_wall"],
-            air_gap=qin("Headspace air gap per package", f"ag_{kind}", "small", pre["air_gap"], 0, 0.05,
-                        si_scale=1000),
-            k_air=D.packaging.k_air,
-            surface_wall=pre["surface_wall"],
-        )
-        if pkg.surface_wall:
-            st.caption("Outer box wall is applied as a surface resistance.")
+        pkg_h = qw("number", "Package height", "pkg_h", "length", D.packaging.package_height, 0.02, 2.0)
+        with st.expander("Packaging details"):
+            wall = qw("number", "Wall thickness", f"wt_{kind}", "small", pre["wall_thickness"], 0, 0.02,
+                      si_scale=1000)
+            k_wall = qw("number", "Wall conductivity", f"kw_{kind}", "k", pre["k_wall"], 0.001, 1)
+            rho_wall = qw("number", "Wall density", f"rw_{kind}", "density", pre["wall_density"], 0, 2000)
+            gap = qw("number", "Headspace air gap per package", f"ag_{kind}", "small", pre["air_gap"], 0, 0.05,
+                     si_scale=1000)
+            if pre["surface_wall"]:
+                st.caption("Outer box wall is applied as a surface resistance.")
+        pkg = Packaging(kind, pkg_h, wall, k_wall, rho_wall, pre["cp_wall"], gap, D.packaging.k_air,
+                        pre["surface_wall"])
 
-    with sb.expander("Product", expanded=False):
-        p = D.product
-        product = Product(
-            name=st.text_input("Name", p.name, key="w::pname"),
-            water_fraction=qin("Water content (mass fraction)", "xw", None, p.water_fraction, 0, 1, step=0.01),
-            bound_water_fraction=qin("Bound (unfreezable) share of water", "xb", None,
-                                     p.bound_water_fraction, 0, 1, step=0.01),
-            cp_unfrozen=qin("cp unfrozen", "cpu", "cp", p.cp_unfrozen, 100, 5000),
-            cp_frozen=qin("cp frozen", "cpf", "cp", p.cp_frozen, 100, 5000),
-            k_unfrozen=qin("k unfrozen", "ku", "k", p.k_unfrozen, 0.01, 5),
-            k_frozen=qin("k frozen", "kf", "k", p.k_frozen, 0.01, 5),
-            density=qin("Product density (solid)", "rho", "density", p.density, 100, 2000),
-            T_freeze=qin("Initial freezing point", "Tf", "temp", p.T_freeze, -15, 0),
-            latent_heat_water=p.latent_heat_water,
-        )
+    with c2:
+        st.markdown("**Pallet**")
+        l = D.load
+        mass = qw("slider", "Product mass", "mass", "mass", l.mass, 100, 1200, step=5 if units() == U.SI else 10)
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            length = qw("number", "Depth", "length", "length", l.length, 0.2, 3)
+        with d2:
+            width = qw("number", "Width", "width", "length", l.width, 0.2, 3)
+        with d3:
+            height = qw("number", "Height", "height", "length", l.height, 0.1, 4,
+                        help="Product height, excluding spacers.")
+        use_sp = st.toggle("Blast spacers between layers", l.use_spacers, key="w::use_sp")
+        n_sp = islider("Spacer layers", "n_sp", l.n_spacers, 1, 15, disabled=not use_sp)
+        t_sp = qw("number", "Spacer thickness", "t_sp", "small", l.spacer_thickness, 0.005, 0.2,
+                  si_scale=1000, disabled=not use_sp)
+        load = PalletLoad(mass, length, width, height, use_sp, n_sp, t_sp, "both",
+                          ss.get("w::geom", "auto"))
+        if use_sp:
+            st.caption(f"{n_sp + 1} layers of {cv('length', height / (n_sp + 1)):.2f} {ul('length')}; "
+                       f"stack height {cv('length', load.stack_height):.2f} {ul('length')}")
 
-    with sb.expander("Simulation", expanded=False):
-        s = D.sim
-        sim = SimSettings(
-            T_start=qin("Load-in temperature", "T0", "temp", s.T_start, -10, 40),
-            T_target=qin("Target core temperature", "Ttgt", "temp", s.T_target, -50, 0),
-            n_nodes=iin("Nodes (core → surface)", "nodes", s.n_nodes, 2, 200),
-            dt_max=qin("Max time step [s]", "dtmax", None, s.dt_max, 1.0, 600.0, step=1.0,
-                       help="The solver uses the smaller of this and the explicit stability limit."),
-            t_max_hours=qin("Max simulated time [h]", "tmax", None, s.t_max_hours, 1.0, 1000.0, step=1.0),
-            record_every_s=s.record_every_s,
-        )
-
-    return Scenario(product, pkg, load, air, cell, sim)
+        st.markdown("**Temperatures**")
+        T0 = qw("slider", "Load-in temperature", "T0", "temp", D.sim.T_start, -5, 40)
+        Tt = qw("slider", "Target core temperature", "Ttgt", "temp", D.sim.T_target, -40, -5)
+    return product, pkg, load, T0, Tt
 
 
-@st.cache_data(show_spinner="Running simulation…")
-def run(d: dict):
-    s = Scenario.from_dict(d)
-    r = simulate(s)
-    return r, summarize(r, s)
+def document_height(n_rows: int) -> int:
+    return 38 + 35 * n_rows
 
 
-def fmt_h(t):
-    return "—" if t is None else f"{t:.1f} h"
+def cell_tab() -> tuple[CellSpec, Air]:
+    c1, c2 = st.columns(2, gap="medium")
+    with c1:
+        st.markdown("**Size (pallet positions)**")
+        c = D.cell
+        n_deep = islider("Deep", "n_deep", c.n_deep, 1, 10)
+        n_wide = islider("Wide", "n_wide", c.n_wide, 1, 10)
+        n_high = islider("High", "n_high", c.n_high, 1, 8)
+        st.caption(f"{n_deep * n_wide * n_high} pallet positions")
+        inlet = st.selectbox("Air enters through", CELL_FACES, index=CELL_FACES.index(c.inlet_face),
+                             key="w::inlet", format_func=lambda f: f"{f} → out {OPPOSITE[f]}")
+    with c2:
+        st.markdown("**Air**")
+        a = D.air
+        T_in = qw("slider", "Supply air temperature", "T_in", "temp", a.T_in, -50, -10)
+        flow = qw("slider", "Airflow per pallet", "flow", "flow", a.flow_per_pallet, 0.1, 5.0)
+        st.caption(f"Cell total {cv('flow', flow * n_deep * n_wide * n_high):,.1f} {ul('flow')}")
+        htc = qw("slider", "Surface HTC", "htc", "htc", a.htc, 5, 80)
+        ratio = qw("slider", "Spacer velocity, flow across spacers", "ratio", None, a.blocked_velocity_ratio,
+                   0.01, 1.0, si_scale=100, unit_label="% of free", step=1.0, format="%.0f")
+        n_exp = qw("slider", "HTC velocity exponent n (h ∝ vⁿ)", "n_exp", None, a.htc_velocity_exponent,
+                   0.3, 1.0, step=0.05)
+    return CellSpec(n_deep, n_wide, n_high, inlet), Air(T_in, flow, htc, ratio, n_exp, a.cp)
+
+
+def model_tab() -> SimSettings:
+    c1, c2 = st.columns(2, gap="medium")
+    s = D.sim
+    with c1:
+        st.radio("Units", [U.SI, U.IP], horizontal=True, key="units")
+        n_nodes = islider("Nodes, core → surface", "nodes", s.n_nodes, 10, 100,
+                          help="40 gives ~1–2 % freeze-time error.")
+        st.selectbox("1-D geometry", ["auto", "plate", "sphere", "cylinder"], key="w::geom",
+                     help="auto: plate if the block's smallest dimension is < 0.5× the middle one, "
+                          "otherwise an equivalent sphere (R = 3V/A).")
+    with c2:
+        t_max = qw("slider", "Max simulated time", "tmax", None, s.t_max_hours, 12, 500, unit_label="h",
+                   step=12.0, format="%.0f")
+        dt_max = qw("number", "Max time step", "dtmax", None, s.dt_max, 1, 600, unit_label="s", step=1.0,
+                    format="%.0f", help="The solver uses the smaller of this and the stability limit.")
+        rec = qw("number", "Output interval", "rec", None, s.record_every_s, 60, 3600, si_scale=1 / 60,
+                 unit_label="min", step=1.0, format="%.0f", help="Resolution of the time slider and plots.")
+    return SimSettings(s.T_start, s.T_target, n_nodes, dt_max, t_max, rec)
 
 
 # ---------------------------------------------------------------- layout ----
-st.title("Blast Freezer Model")
-scenario = sidebar_inputs()
+st.markdown("<style>div.block-container{padding-top:1.5rem}</style>", unsafe_allow_html=True)
+left, right = st.columns([5, 6], gap="large")
 
-warnings = []
-if scenario.load.use_spacers:
-    layer = scenario.load.height / (scenario.load.n_spacers + 1)
-    if scenario.packaging.package_height > layer * 1.001:
-        warnings.append(f"Package height ({cv('length', scenario.packaging.package_height):.2f} "
-                        f"{ul('length')}) is taller than the layer between spacers "
-                        f"({cv('length', layer):.2f} {ul('length')}).")
-for w in warnings:
-    st.warning(w)
+with left:
+    st.subheader("Inputs")
+    t_pal, t_cell, t_model, t_boost = st.tabs(["Pallet", "Cell", "Model", "Boost"])
+    with t_model:
+        sim = model_tab()
+    with t_pal:
+        product, pkg, load, T0, Tt = pallet_tab()
+    with t_cell:
+        cell, air = cell_tab()
+    with t_boost:
+        st.info("Boost inputs will go here.")
+    sim.T_start, sim.T_target = T0, Tt
+    scenario = Scenario(product, pkg, load, air, cell, sim)
 
-try:
-    res, summ = run(scenario.to_dict())
-except ValueError as e:
-    st.error(str(e))
-    st.stop()
+    if load.use_spacers and pkg.package_height > load.height / (load.n_spacers + 1) * 1.001:
+        st.warning("Package height is taller than the layer between spacers.")
+    if st.button("Run solver", type="primary", width="stretch"):
+        try:
+            with st.spinner("Solving…"):
+                res = simulate(scenario)
+            ss["res"], ss["res_scn"] = res, scenario.to_dict()
+            ss["w::time"] = 0.0
+        except ValueError as e:
+            st.error(str(e))
 
-info = res.info
-c = st.columns(5)
-c[0].metric("Cell freeze time (last pallet)", fmt_h(summ["cell_freeze_time_h"]),
-            help="Time for the slowest pallet core to reach the target.")
-c[1].metric("First pallet frozen", fmt_h(summ["first_freeze_time_h"]))
-c[2].metric("Peak cell load", f"{cv('power', summ['peak_cell_kW']):,.0f} {ul('power')}")
-c[3].metric("Energy removed (cell)", f"{cv('energy', summ['energy_removed_kWh']):,.0f} {ul('energy')}")
-c[4].metric("Spacer HTC", f"{cv('htc', info['h']):.1f} {ul('htc')}", info["spacer_alignment"],
-            delta_color="off")
-if not summ["all_frozen"]:
-    st.warning(f"Not every pallet reached the target within {summ['sim_end_h']:.0f} h. "
-               "Increase the max simulated time under Simulation.")
-st.caption(f"{info['geometry_note']}  Air: {info['inlet']} → {info['outlet']}, "
-           f"{info['n_lanes']} lanes × {info['n_series']} pallets in series.")
+res = ss.get("res")
+shown = Scenario.from_dict(ss["res_scn"]) if res is not None else scenario
+stale = res is not None and ss["res_scn"] != scenario.to_dict()
 
-tab_cell, tab_pal, tab_model, tab_data = st.tabs(["Cell", "Pallet detail", "Model details", "Data"])
-P = res.pallets.copy()
-for col in ["T_core", "T_surface", "T_mean", "T_air_in", "T_air_out"]:
-    P[col] = cv("temp", P[col])
-P["Q"] = cv("power", P["Q_kW"])
-C = res.cell.copy()
-for col in ["T_air_in", "T_air_out"]:
-    C[col] = cv("temp", C[col])
-C["Q"] = cv("power", C["Q_cell_kW"])
-T_target_d = cv("temp", scenario.sim.T_target)
-pos_label = lambda i: f"P{i} ({'inlet' if i == 1 else 'outlet' if i == info['n_series'] else 'mid'})"
+with right:
+    h1, h2 = st.columns([3, 2])
+    h1.subheader("Cell")
+    view = h2.radio("View", ["front", "side", "top"], horizontal=True, key="w::view",
+                    format_func=str.capitalize, label_visibility="collapsed")
+    if stale:
+        st.info("Inputs changed since the last solve. Showing the last solution; click **Run solver** to update.")
 
-with tab_cell:
-    col1, col2 = st.columns(2)
-    fig = go.Figure()
-    for i, g in P.groupby("position"):
-        fig.add_trace(go.Scatter(x=g.time_h, y=g.T_core, name=pos_label(i)))
-    fig.add_hline(y=T_target_d, line_dash="dash", annotation_text="Target")
-    fig.update_layout(title="Core temperature by series position", xaxis_title="Blasting time [h]",
-                      yaxis_title=ul("temp"), height=420, legend=dict(orientation="h", y=-0.25))
-    col1.plotly_chart(fig, width="stretch")
+    c = shown.cell
+    total_flow = shown.air.flow_per_pallet * c.n_pallets
+    flow_text = f"{cv('flow', total_flow):,.1f} {ul('flow')}"
+    if res is None:
+        times = [0.0]
+        n_ser = {"bottom": c.n_high, "top": c.n_high, "front": c.n_deep, "back": c.n_deep,
+                 "left": c.n_wide, "right": c.n_wide}[c.inlet_face]
+        T_series, T_out, t_sel = [shown.sim.T_start] * n_ser, None, None
+    else:
+        times = [float(t) for t in res.cell.time_h]
+    fig_slot = st.empty()
+    if res is not None:
+        t_sel = st.select_slider("Model time", options=times, key="w::time",
+                                 format_func=lambda t: f"{t:.1f} h")
+        P = res.pallets[np.isclose(res.pallets.time_h, t_sel)].sort_values("position")
+        T_series = P.T_core.tolist()
+        T_out = float(res.cell.loc[np.isclose(res.cell.time_h, t_sel), "T_air_out"].iloc[0])
+    else:
+        st.slider("Model time", 0.0, 1.0, 0.0, disabled=True, help="Run the solver first.")
+    fig_slot.plotly_chart(
+        cell_figure(c.n_deep, c.n_wide, c.n_high, c.inlet_face, T_series, shown.sim.T_start,
+                    shown.sim.T_target, cv, ul, shown.air.T_in, T_out, flow_text, view=view, height=500),
+        width="stretch", config={"displayModeBar": False})
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=C.time_h, y=C.Q, name="Cell load"))
-    fig.update_layout(title="Cell heat removal", xaxis_title="Blasting time [h]",
-                      yaxis_title=ul("power"), height=420)
-    col2.plotly_chart(fig, width="stretch")
+    if res is not None:
+        summ = summarize(res, shown)
+        m = st.columns(4)
+        fmt_h = lambda t: "—" if t is None else f"{t:.1f} h"
+        m[0].metric("Cell frozen (last pallet)", fmt_h(summ["cell_freeze_time_h"]))
+        m[1].metric("First pallet frozen", fmt_h(summ["first_freeze_time_h"]))
+        m[2].metric("Peak cooling", f"{cv('power', summ['peak_cell_kW']):,.0f} {ul('power')}")
+        m[3].metric("Energy removed", f"{cv('energy', summ['energy_removed_kWh']):,.0f} {ul('energy')}")
+        if not summ["all_frozen"]:
+            st.warning(f"Not every pallet reached the target within {summ['sim_end_h']:.0f} h "
+                       "(Model tab → Max simulated time).")
 
-    col3, col4 = st.columns(2)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=C.time_h, y=C.T_air_in, name="Cell inlet", line=dict(dash="dot")))
-    for i, g in P.groupby("position"):
-        fig.add_trace(go.Scatter(x=g.time_h, y=g.T_air_out, name=f"After {pos_label(i)}"))
-    fig.update_layout(title="Air temperature along the flow path", xaxis_title="Blasting time [h]",
-                      yaxis_title=ul("temp"), height=420, legend=dict(orientation="h", y=-0.25))
-    col3.plotly_chart(fig, width="stretch")
+st.divider()
+t_temp, t_pow = st.tabs(["Temperature", "Power"])
+if res is None:
+    for t in (t_temp, t_pow):
+        t.info("Run the solver to see the time series.")
+else:
+    with t_temp:
+        st.plotly_chart(temperature_figure(res, shown.sim.T_target, cv, ul, t_mark=t_sel), width="stretch")
+        st.caption("Warmest / coldest = last / first pallet to reach the target. "
+                   "Surface node = outermost finite volume.")
+    with t_pow:
+        st.plotly_chart(power_figure(res, cv, ul, t_mark=t_sel), width="stretch")
+        st.caption("Fan power is not modeled yet.")
 
-    ft = res.freeze_times_h
-    fig = go.Figure(go.Bar(x=[pos_label(i + 1) for i in range(len(ft))],
-                           y=[t if t is not None else np.nan for t in ft],
-                           text=[fmt_h(t) for t in ft], textposition="outside"))
-    fig.update_layout(title=f"Freeze time by series position (inlet: {info['inlet']})",
-                      yaxis_title="h", height=420)
-    col4.plotly_chart(fig, width="stretch")
-
-with tab_pal:
-    n_s = info["n_series"]
-    pos = st.selectbox("Series position", list(range(1, n_s + 1)), format_func=pos_label)
-    g = P[P.position == pos]
-    col1, col2 = st.columns(2)
-    fig = go.Figure()
-    for name, col, dash in [("Core", "T_core", None), ("Mean", "T_mean", None),
-                            ("Surface", "T_surface", None), ("Air in", "T_air_in", "dot"),
-                            ("Air out", "T_air_out", "dot")]:
-        fig.add_trace(go.Scatter(x=g.time_h, y=g[col], name=name, line=dict(dash=dash)))
-    fig.add_hline(y=T_target_d, line_dash="dash", annotation_text="Target")
-    fig.update_layout(title=f"{pos_label(pos)} temperatures", xaxis_title="Blasting time [h]",
-                      yaxis_title=ul("temp"), height=420, legend=dict(orientation="h", y=-0.25))
-    col1.plotly_chart(fig, width="stretch")
-
-    depth = cv("small", g.front_depth_mm) if units() == U.IP else g.front_depth_mm
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=g.time_h, y=depth, name="Front depth"))
-    fig.add_trace(go.Scatter(x=g.time_h, y=100 * g.frozen_fraction, name="Frozen [%]", yaxis="y2"))
-    fig.update_layout(title="Freezing front", xaxis_title="Blasting time [h]",
-                      yaxis=dict(title=f"Depth from surface [{ul('small')}]"),
-                      yaxis2=dict(title="Frozen [%]", overlaying="y", side="right", range=[0, 105]),
-                      height=420, legend=dict(orientation="h", y=-0.25))
-    col2.plotly_chart(fig, width="stretch")
-
-    prof = res.profiles[pos]
-    x = np.array(prof.columns, dtype=float)
-    x = cv("small", x) if units() == U.IP else x
-    Tp = cv("temp", prof.values)
-    idx = np.unique(np.linspace(0, len(prof) - 1, 10).astype(int))
-    col3, col4 = st.columns(2)
-    fig = go.Figure()
-    for i in idx:
-        fig.add_trace(go.Scatter(x=x, y=Tp[i], name=f"{prof.index[i]:.1f} h"))
-    fig.add_hline(y=cv("temp", scenario.product.T_freeze), line_dash="dot", annotation_text="Freezing point")
-    fig.update_layout(title="Temperature profile, core (0) → surface",
-                      xaxis_title=f"Distance from core [{ul('small')}]", yaxis_title=ul("temp"), height=420)
-    col3.plotly_chart(fig, width="stretch")
-    fig = go.Figure(go.Heatmap(x=prof.index, y=x, z=Tp.T, colorscale="RdBu_r",
-                               colorbar=dict(title=ul("temp"))))
-    fig.update_layout(title="Temperature field", xaxis_title="Blasting time [h]",
-                      yaxis_title=f"Distance from core [{ul('small')}]", height=420)
-    col4.plotly_chart(fig, width="stretch")
-
-with tab_model:
-    a, b = st.columns(2)
-    a.subheader("Pallet geometry & material")
-    a.table({
-        "Shape": info["shape"],
-        "R (half-thickness / radius)": f"{cv('small', info['R_mm']) if units() == U.IP else info['R_mm']:.1f} {ul('small')}",
-        "Layers modeled as identical": str(info["n_layers"]),
-        "Heat transfer area / pallet": f"{cv('area', info['area_m2']):.2f} {ul('area')}",
-        "Product envelope volume": f"{cv('volume', info['envelope_volume_m3']):.3f} {ul('volume')}",
-        "Bulk density": f"{cv('density', info['rho_bulk']):.1f} {ul('density')}",
-        "Volume: product / voids / walls / gap": (
-            f"{info['phi_product']:.0%} / {info['phi_void']:.0%} / "
-            f"{info['phi_wall']:.1%} / {info['phi_gap']:.1%}"),
-        "k_eff unfrozen / frozen": f"{cv('k', info['k_eff_unfrozen']):.3f} / {cv('k', info['k_eff_frozen']):.3f} {ul('k')}",
-        "Surface packaging resistance": f"{info['R_surface']:.3f} m²·K/W",
-        "Latent heat (freezable water)": f"{cv('latent', info['L_vol'] / 1e6):.1f} {ul('latent')}",
-    })
-    b.subheader("Air path & numerics")
-    b.table({
-        "Flow": f"{info['inlet']} → {info['outlet']} (along {info['flow_axis']})",
-        "Lanes × pallets in series": f"{info['n_lanes']} × {info['n_series']}",
-        "Airflow cell / lane": f"{cv('flow', info['flow_total_m3s']):,.1f} / {cv('flow', info['flow_lane_m3s']):,.2f} {ul('flow')}",
-        "Spacers": info["spacer_alignment"],
-        "HTC applied → effective (ε-NTU)": f"{cv('htc', info['h']):.2f} → {cv('htc', info['h_eff']):.2f} {ul('htc')}",
-        "NTU / effectiveness per pallet": f"{info['NTU']:.3f} / {info['eps']:.3f}",
-        "Nodes / Δx": f"{info['n_nodes']} / {info['dx_mm']:.2f} mm",
-        "Time step used / stability limit": f"{info['dt_s']:.1f} / {info['dt_stable_s']:.1f} s",
-        "Steps": f"{info['n_steps']:,}",
-        "Energy balance error": f"{info['energy_balance_error']:.1e}",
-    })
-
-with tab_data:
-    st.caption("Downloads are in SI units.")
-    st.dataframe(res.pallets, width="stretch", height=400)
-    d1, d2, d3 = st.columns(3)
-    d1.download_button("Pallet history CSV", res.pallets.to_csv(index=False), "pallets.csv", "text/csv")
-    d2.download_button("Cell history CSV", res.cell.to_csv(index=False), "cell.csv", "text/csv")
-    d3.download_button("Scenario JSON", json.dumps(scenario.to_dict(), indent=2), "scenario.json",
-                       "application/json")
+    with st.expander("Model details & data"):
+        info = res.info
+        a, b = st.columns(2)
+        a.dataframe(pd.DataFrame([
+            ("Pallet geometry", info["geometry_note"]),
+            ("Bulk density", f"{cv('density', info['rho_bulk']):.0f} {ul('density')}"),
+            ("Volume: product / voids / walls / gap",
+             f"{info['phi_product']:.0%} / {info['phi_void']:.0%} / {info['phi_wall']:.1%} / {info['phi_gap']:.1%}"),
+            ("k_eff unfrozen / frozen",
+             f"{cv('k', info['k_eff_unfrozen']):.3f} / {cv('k', info['k_eff_frozen']):.3f} {ul('k')}"),
+            ("Surface packaging resistance", f"{info['R_surface']:.3f} m²·K/W"),
+            ("Latent heat (freezable water)", f"{cv('latent', info['L_vol'] / 1e6):.1f} {ul('latent')}"),
+        ], columns=["Item", "Value"]), hide_index=True, width="stretch")
+        b.dataframe(pd.DataFrame([
+            ("Flow", f"{info['inlet']} → {info['outlet']}, {info['n_lanes']} lanes × {info['n_series']} in series"),
+            ("Spacers", info["spacer_alignment"]),
+            ("HTC applied → effective (ε-NTU)",
+             f"{cv('htc', info['h']):.2f} → {cv('htc', info['h_eff']):.2f} {ul('htc')}"),
+            ("Airflow per lane", f"{cv('flow', info['flow_lane_m3s']):,.2f} {ul('flow')}"),
+            ("Nodes / time step", f"{info['n_nodes']} / {info['dt_s']:.1f} s ({info['n_steps']:,} steps)"),
+            ("Energy balance error", f"{info['energy_balance_error']:.1e}"),
+        ], columns=["Item", "Value"]), hide_index=True, width="stretch")
+        ft = pd.DataFrame({"Series position": [f"P{i + 1}" for i in range(len(res.freeze_times_h))],
+                           "Freeze time [h]": [None if t is None else round(t, 2) for t in res.freeze_times_h]})
+        st.dataframe(ft, hide_index=True)
+        d1, d2, d3 = st.columns(3)
+        d1.download_button("Pallet history CSV (SI)", res.pallets.to_csv(index=False), "pallets.csv", "text/csv")
+        d2.download_button("Cell history CSV (SI)", res.cell.to_csv(index=False), "cell.csv", "text/csv")
+        d3.download_button("Scenario JSON", json.dumps(shown.to_dict(), indent=2), "scenario.json",
+                           "application/json")
