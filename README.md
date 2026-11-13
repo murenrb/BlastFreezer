@@ -55,4 +55,16 @@ pytest
 
 ## Status
 
-Single pallet and series-flow cell in place. Inlet air is constant and even.
+Single pallet and series-flow cell in place.
+
+## Current assumptions / deferred items
+
+- Inlet air temperature is constant and evenly distributed. Airflow per pallet is an input;
+  later it will come from a fan input split evenly per lane.
+- Air moves in straight lines from the inlet face to the opposite face (no turns).
+- Spacer channels are open in both horizontal directions by default.
+- Surface HTC is a constant input (better sources pending); only the across-spacer velocity
+  drop changes it.
+- With spacers, pallet side faces are ignored (conservative, especially for flow across spacers).
+- All pallets start at the load-in temperature at t = 0, so the peak load is an initial spike.
+  Loading time and coil/refrigeration limits come with the coil model.
