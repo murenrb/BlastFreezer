@@ -46,11 +46,11 @@ def test_lanes_follow_inlet_face(face, axis, n_series, n_lanes):
 def test_spacer_alignment_sets_htc():
     s = _spacers(Scenario())
     s.cell.inlet_face = "bottom"
-    assert air_path(s).h == pytest.approx(30.0 * 0.1 ** 0.8)       # vertical: across spacers
+    assert air_path(s).h == pytest.approx(30.0 * (1 - 0.9))       # vertical: across spacers
     s.cell.inlet_face = "front"
     assert air_path(s).h == pytest.approx(30.0)                      # along channels
     s.load.spacer_channels = "width"
-    assert air_path(s).h == pytest.approx(30.0 * 0.1 ** 0.8)       # depth flow across width-only channels
+    assert air_path(s).h == pytest.approx(30.0 * (1 - 0.9))       # depth flow across width-only channels
     s.load.use_spacers = False
     assert air_path(s).h == pytest.approx(30.0)                      # no spacers: plain surface
 

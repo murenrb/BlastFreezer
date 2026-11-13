@@ -205,10 +205,11 @@ def model_tab() -> tuple[SimSettings, float, float]:
         st.radio("Units", [U.SI, U.IP], horizontal=True, key="units")
         st.markdown("**Heat transfer**")
         htc = qw("slider", "Surface HTC", "htc", "htc", a.htc, 5, 80)
-        ratio = qw("slider", "Spacer air velocity when flow crosses spacers", "ratio", None,
-                   a.blocked_velocity_ratio, 0.01, 1.0, si_scale=100, unit_label="% of free", step=1.0,
-                   format="%.0f", help=f"Spacer HTC = HTC × ratio^{a.htc_velocity_exponent} when air "
-                                       "runs across the spacer channels (vertical flow).")
+        reduction = qw("slider", "Reduction of HTC when spacers are perpendicular to airflow",
+                       "htc_reduction", None, a.spacer_htc_reduction, 0.0, 1.0, si_scale=100, unit_label="%",
+                       step=1.0, format="%.0f",
+                       help="When airflow is not aligned with spacers, heat transfer is reduced by this "
+                            "amount because the spacers don't see good airflow.")
     with c2:
         st.markdown("**Solver**")
         n_nodes = islider("Nodes, core → surface", "nodes", s.n_nodes, 10, 100,
@@ -222,7 +223,7 @@ def model_tab() -> tuple[SimSettings, float, float]:
                     format="%.0f", help="The solver uses the smaller of this and the stability limit.")
         rec = qw("number", "Output interval", "rec", None, s.record_every_s, 60, 3600, si_scale=1 / 60,
                  unit_label="min", step=1.0, format="%.0f", help="Resolution of the time slider and plots.")
-    return SimSettings(s.T_start, s.T_target, n_nodes, dt_max, t_max, rec), htc, ratio
+    return SimSettings(s.T_start, s.T_target, n_nodes, dt_max, t_max, rec), htc, reduction
 
 
 # ---------------------------------------------------------------- layout ----
@@ -232,7 +233,7 @@ with left:
     st.subheader("Inputs")
     t_pal, t_cell, t_model, t_boost = st.tabs(["Pallet", "Cell", "Model", "Boost"])
     with t_model:
-        sim, htc, ratio = model_tab()
+        sim, htc, reduction = model_tab()
     with t_pal:
         product, pkg, load, T0, Tt = pallet_tab()
     with t_cell:
@@ -240,7 +241,7 @@ with left:
     with t_boost:
         st.info("Boost inputs will go here.")
     sim.T_start, sim.T_target = T0, Tt
-    air = Air(T_in, flow_total, htc, ratio, D.air.htc_velocity_exponent, D.air.cp)
+    air = Air(T_in, flow_total, htc, reduction, D.air.cp)
     scenario = Scenario(product, pkg, load, air, cell, sim)
 
     if load.use_spacers and pkg.package_height > load.height / (load.n_spacers + 1) * 1.001:

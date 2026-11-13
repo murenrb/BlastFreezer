@@ -88,8 +88,7 @@ class Air:
     T_in: float = -45.0                    # degC, air entering the cell (constant, even)
     flow_total: float = 32.0               # m^3/s, total cell airflow, split evenly across lanes
     htc: float = 30.0                      # W/m^2-K, surface HTC with air flowing freely
-    blocked_velocity_ratio: float = 0.1    # spacer velocity / free velocity when flow is across spacers
-    htc_velocity_exponent: float = 0.8     # h ∝ v^n (fixed for now, not a GUI input)
+    spacer_htc_reduction: float = 0.9      # HTC reduction when airflow is perpendicular to the spacers
     cp: float = 1006.0                     # J/kg-K
 
 

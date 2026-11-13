@@ -47,7 +47,7 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
   next one's air-in.
 - Total cell airflow is an input, split evenly across lanes.
 - Flow along spacer channels uses the surface HTC; flow across them (vertical, or across one-way
-  channels) reduces spacer velocity by a ratio (default 0.1) with h proportional to v^n (n = 0.8).
+  channels) reduces the HTC by an input percentage (default 90 %).
 - Runs until every pallet core reaches the target.
 
 ## Setup
@@ -75,8 +75,8 @@ Single pallet and series-flow cell in place.
   will come from a fan input. It is split evenly per lane.
 - Air moves in straight lines from the inlet face to the opposite face (no turns).
 - Spacer channels are open in both horizontal directions by default.
-- Surface HTC is a constant input (better sources pending); only the across-spacer velocity
-  drop changes it (h ∝ v^0.8, exponent fixed in code).
+- Surface HTC is a constant input (better sources pending); the only change is the reduction
+  applied when airflow is perpendicular to the spacers.
 - With spacers, pallet side faces are ignored (conservative, especially for flow across spacers).
 - All pallets start at the load-in temperature at t = 0, so the peak load is an initial spike.
   Loading time and coil/refrigeration limits come with the coil model.

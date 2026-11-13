@@ -13,8 +13,8 @@ flows.
 
 Spacers: if the flow runs along the spacer channels, the surface HTC is used
 as given. If it runs across them (vertical flow, or horizontal flow across
-one-way channels), the spacer velocity drops to `blocked_velocity_ratio`
-of the free velocity and h scales as v^n.
+one-way channels), the HTC is reduced by `spacer_htc_reduction`:
+h = htc * (1 - reduction).
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def air_path(s: Scenario) -> AirPath:
         alignment, h = "along channels", a.htc
     else:
         alignment = "across channels"
-        h = a.htc * a.blocked_velocity_ratio ** a.htc_velocity_exponent
+        h = a.htc * (1.0 - a.spacer_htc_reduction)
 
     flow_total = a.flow_total
     m_dot_total = air_density(a.T_in) * flow_total
