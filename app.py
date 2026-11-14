@@ -201,15 +201,71 @@ def cell_tab(airflow: float) -> CellSpec:
     return CellSpec(n_deep, n_wide, n_high, inlet)
 
 
-def _readonly(label: str, q: str, si_value: float, si_scale: float = 1.0):
+def _readonly(label: str, q: str, si_value: float, help: str, si_scale: float = 1.0):
     """Greyed-out number showing a calculated value."""
     st.number_input(f"{label} [{ul(q)}]", value=float(cv(q, si_value * si_scale)), format=U.fmt(q, units()),
-                    disabled=True, help="Calculated from the other coil inputs.")
+                    disabled=True, help=help)
 
 
 def _forget_widget(qid: str):
     for sys_ in (U.SI, U.IP):
         ss.pop(f"w::{qid}::{sys_}", None)
+
+
+HELP = {
+    "coil_Q": (
+        "Coil capacity from the supplier's cut sheet at the design point below. Together with the design "
+        "supply air, return air and SST it sets the coil UA (UA = Q / LMTD), which is then held constant. "
+        "At any other return air temperature and SST during the blast, the coil load is "
+        "ε · ṁcp · (T_return − SST), with ε = 1 − exp(−UA / ṁcp)."),
+    "coil_Ts": (
+        "Air temperature leaving the coil at the design point, before fan heat. Used to back out the coil "
+        "UA, and as the reference temperature for converting airflow (volume) to mass flow."),
+    "coil_SST": (
+        "Saturated suction temperature on the coil cut sheet at the design point. Only used to back out "
+        "the coil UA; during the blast the SST comes from the balance between the coil, the refrigeration "
+        "system and the controls. It does not need to match the refrigeration system's design SST."),
+    "driver": (
+        "The design cooling power links airflow and the air temperature drop across the coil: "
+        "Q = ṁ · cp · (T_return − T_supply). Pick which one you enter; the other is calculated and greyed "
+        "out. Switching keeps the current values."),
+    "coil_Tr": (
+        "Air entering the coil (leaving the pallets) at the design point. A smaller temperature drop "
+        "across the coil means more airflow for the same design power; blast coils typically run a "
+        "4–8 °F (2–4 K) drop."),
+    "coil_flow": (
+        "Total cell airflow through the coil, measured at the design supply air temperature. It is split "
+        "evenly across the pallet lanes and held constant through the blast (fixed-speed fans)."),
+    "calc_flow": "Calculated: design cooling power ÷ (cp × air density × (return − supply)).",
+    "calc_Tr": "Calculated: supply air + design cooling power ÷ (cp × air density × airflow).",
+    "fan_spec": (
+        "Fan power per unit of airflow (default 1 hp per 1000 CFM). Total fan power = this × airflow. "
+        "All of it ends up as heat in the cell air: it is added to the air leaving the coil, so the coil "
+        "must remove pallet load + fan heat. More airflow improves heat transfer but adds fan heat."),
+    "ref_Q": (
+        "Refrigeration capacity available to this coil at the refrigeration design SST (compressor cut "
+        "sheet or plant allocation). The compressor is treated as fixed displacement: the suction volume "
+        "flow V = Q / (ρ_vapor · h_fg) at the design SST is held constant, so capacity at any other SST "
+        "scales with vapor density × latent heat. Higher SST → denser suction gas → more capacity."),
+    "ref_SST": (
+        "Suction temperature at which the design refrigeration power is rated. Independent of the coil "
+        "design SST, so cut sheets from different suppliers can be combined."),
+    "refrigerant": (
+        "Sets how capacity changes with SST, using vapor density and latent heat from CoolProp. Liquid is "
+        "assumed to reach the coil saturated at SST (recirculated / low-pressure receiver). CO2 cannot go "
+        "below its triple point (−69.8 °F / −56.6 °C)."),
+    "SST_max": (
+        "Highest suction temperature the plant allows. Under heavy load (right after loading), a "
+        "fixed-displacement compressor lets SST rise and its capacity climb; in a central plant, other "
+        "compressors hold suction pressure instead. When the balance would push SST above this value, "
+        "SST is held here and the coil gets whatever capacity it needs. Set it equal to the design SST "
+        "for a stiff central plant, or high to model a dedicated, constrained system."),
+    "T_set": (
+        "Lowest allowed return air temperature; colder than this, frost on the coil becomes too "
+        "dendritic. Once return air reaches the setpoint, refrigeration capacity is reduced (SST rises, "
+        "like an evaporator pressure regulator) to hold it there while the pallets finish freezing. "
+        "Airflow stays fixed."),
+}
 
 
 def cooling_tab() -> Cooling:
@@ -218,44 +274,45 @@ def cooling_tab() -> Cooling:
     with c1:
         st.markdown("**Coil (design point)**")
         coil_Q = qw("number", "Design cooling power", "coil_Q", "power", c.coil_Q_design, 1_000, 2_000_000,
-                    si_scale=1e-3)
-        coil_Ts = qw("number", "Design supply air temp", "coil_Ts", "temp", c.coil_T_supply_design, -60, 0)
-        coil_SST = qw("number", "Design SST", "coil_SST", "temp", c.coil_SST_design, -70, 0)
+                    si_scale=1e-3, help=HELP["coil_Q"])
+        coil_Ts = qw("number", "Design supply air temp", "coil_Ts", "temp", c.coil_T_supply_design, -60, 0,
+                     help=HELP["coil_Ts"])
+        coil_SST = qw("number", "Design SST", "coil_SST", "temp", c.coil_SST_design, -70, 0,
+                      help=HELP["coil_SST"])
         driver = st.segmented_control("Set by", ["Return air", "Airflow"], default="Return air",
-                                      key="w::coil_driver", help="The other value is calculated from the "
-                                      "design cooling power and the air temperature drop across the coil.")
+                                      key="w::coil_driver", help=HELP["driver"])
         driver = driver or "Return air"
         if driver == "Return air":
-            Tr = qw("number", "Design return air temp", "coil_Tr", "temp", c.coil_T_return_design, -60, 10)
+            Tr = qw("number", "Design return air temp", "coil_Tr", "temp", c.coil_T_return_design, -60, 10,
+                    help=HELP["coil_Tr"])
             if Tr <= coil_Ts:
                 st.error("Return air must be warmer than supply air.")
                 Tr = coil_Ts + 0.1
             airflow = coil_airflow(coil_Q, coil_Ts, Tr)
             ss["si::coil_flow"] = airflow
             _forget_widget("coil_flow")
-            _readonly("Airflow", "flow", airflow)
+            _readonly("Airflow", "flow", airflow, HELP["calc_flow"] + " " + HELP["coil_flow"])
         else:
-            airflow = qw("number", "Airflow", "coil_flow", "flow", c.airflow, 0.5, 200)
+            airflow = qw("number", "Airflow", "coil_flow", "flow", c.airflow, 0.5, 200, help=HELP["coil_flow"])
             Tr = coil_return(coil_Q, coil_Ts, airflow)
             ss["si::coil_Tr"] = Tr
             _forget_widget("coil_Tr")
-            _readonly("Design return air temp", "temp", Tr)
-        fan_spec = qw("number", "Fan power", "fan_spec", "fanspec", c.fan_specific_power, 0, 10_000, si_scale=1e-3)
+            _readonly("Design return air temp", "temp", Tr, HELP["calc_Tr"] + " " + HELP["coil_Tr"])
+        fan_spec = qw("number", "Fan power", "fan_spec", "fanspec", c.fan_specific_power, 0, 10_000, si_scale=1e-3,
+                      help=HELP["fan_spec"])
         st.caption(f"Fans: {cv('power', fan_spec * airflow / 1000):,.1f} {ul('power')} of heat "
                    f"({fan_spec * airflow / 745.7:,.0f} hp)")
     with c2:
         st.markdown("**Refrigeration system (design point)**")
         ref_Q = qw("number", "Design refrigeration power", "ref_Q", "power", c.ref_Q_design, 1_000, 2_000_000,
-                   si_scale=1e-3)
-        ref_SST = qw("number", "Design SST", "ref_SST", "temp", c.ref_SST_design, -70, 0)
+                   si_scale=1e-3, help=HELP["ref_Q"])
+        ref_SST = qw("number", "Design SST", "ref_SST", "temp", c.ref_SST_design, -70, 0, help=HELP["ref_SST"])
         refr = st.selectbox("Refrigerant", REFRIGERANT_CHOICES, index=REFRIGERANT_CHOICES.index(c.refrigerant),
-                            key="w::refrigerant")
+                            key="w::refrigerant", help=HELP["refrigerant"])
         st.markdown("**Controls**")
-        SST_max = qw("number", "Max SST", "SST_max", "temp", c.SST_max, -70, 10,
-                     help="The plant holds suction at or below this. Above it, the coil gets the capacity it needs.")
+        SST_max = qw("number", "Max SST", "SST_max", "temp", c.SST_max, -70, 10, help=HELP["SST_max"])
         T_set = qw("number", "Return air setpoint", "T_set", "temp", c.T_return_setpoint, -70, 0,
-                   help="Return air is not allowed below this (frost). Once reached, capacity is reduced "
-                        "to hold it while the pallets finish freezing.")
+                   help=HELP["T_set"])
     cooling = Cooling(coil_Q_design=coil_Q, coil_T_supply_design=coil_Ts, coil_SST_design=coil_SST,
                       airflow=airflow, fan_specific_power=fan_spec, ref_Q_design=ref_Q, ref_SST_design=ref_SST,
                       refrigerant=refr, SST_max=SST_max, T_return_setpoint=T_set)
