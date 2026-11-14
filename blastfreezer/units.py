@@ -38,6 +38,9 @@ Q = {
     "volume":   Quantity("m³", "ft³", 35.31466672, 0, 0.1, 1.0, "%.3f", "%.1f"),
     "latent":   Quantity("MJ/m³", "Btu/ft³", 26.839192, 0, 1.0, 1.0, "%.1f", "%.0f"),  # SI value is MJ/m3
     "ua":       Quantity("kW/K", "Btu/h·°F", 1895.6339, 0, 0.1, 100.0, "%.2f", "%.0f"),  # SI value is kW/K
+    # fan specific power; SI value is kW per m3/s
+    "fanspec":  Quantity("kW per m³/s", "hp per 1000 CFM", 1000 / 745.7 / 2.118880003, 0, 0.05, 0.05,
+                         "%.2f", "%.2f"),
 }
 
 

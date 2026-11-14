@@ -25,7 +25,7 @@ from blastfreezer import (PACKAGING_PRESETS, Air, CellSpec, Packaging, PalletLoa
                           Product, Scenario, SimSettings, simulate, summarize)
 from blastfreezer import units as U
 from blastfreezer.cell import Cell
-from blastfreezer.config import REFRIGERANT_CHOICES, Cooling
+from blastfreezer.config import REFRIGERANT_CHOICES, Cooling, coil_airflow, coil_return
 from blastfreezer.pallet import air_density
 from blastfreezer.refrigeration import Coil, RefSystem, design_return_balance
 from blastfreezer.foods import CUSTOM, DEFAULT_FOOD, FOODS, product_kwargs
@@ -179,11 +179,11 @@ def document_height(n_rows: int) -> int:
     return 38 + 35 * n_rows
 
 
-def cell_tab() -> tuple[CellSpec, float]:
+def cell_tab(airflow: float) -> CellSpec:
     c1, c2 = st.columns(2, gap="medium")
+    c = D.cell
     with c1:
         st.markdown("**Size (pallet positions)**")
-        c = D.cell
         n_deep = islider("Deep", "n_deep", c.n_deep, 1, 10)
         n_wide = islider("Wide", "n_wide", c.n_wide, 1, 10)
         n_high = islider("High", "n_high", c.n_high, 1, 8)
@@ -192,16 +192,27 @@ def cell_tab() -> tuple[CellSpec, float]:
         st.markdown("**Air**")
         inlet = st.selectbox("Air flow direction", GUI_FACES, index=GUI_FACES.index(c.inlet_face),
                              key="w::inlet", format_func=lambda f: FLOW_LABEL[f])
-        flow = qw("slider", "Total airflow", "flow_total", "flow", D.air.flow_total, 1.0, 120.0,
-                  step=0.5 if units() == U.SI else 1000.0)
         axis_n = {"left": n_wide, "right": n_wide, "bottom": n_high, "top": n_high}[inlet]
         n_lanes = n_deep * n_wide * n_high // axis_n
-        st.caption(f"{n_lanes} lanes × {axis_n} pallets in series · "
-                   f"{cv('flow', flow / n_lanes):,.{2 if units() == U.SI else 0}f} {ul('flow')} per lane")
-    return CellSpec(n_deep, n_wide, n_high, inlet), flow
+        dec = 2 if units() == U.SI else 0
+        st.caption(f"Airflow {cv('flow', airflow):,.{dec}f} {ul('flow')} (set on the Cooling tab) · "
+                   f"{n_lanes} lanes × {axis_n} pallets in series · "
+                   f"{cv('flow', airflow / n_lanes):,.{dec}f} {ul('flow')} per lane")
+    return CellSpec(n_deep, n_wide, n_high, inlet)
 
 
-def cooling_tab(flow_total: float) -> Cooling:
+def _readonly(label: str, q: str, si_value: float, si_scale: float = 1.0):
+    """Greyed-out number showing a calculated value."""
+    st.number_input(f"{label} [{ul(q)}]", value=float(cv(q, si_value * si_scale)), format=U.fmt(q, units()),
+                    disabled=True, help="Calculated from the other coil inputs.")
+
+
+def _forget_widget(qid: str):
+    for sys_ in (U.SI, U.IP):
+        ss.pop(f"w::{qid}::{sys_}", None)
+
+
+def cooling_tab() -> Cooling:
     c = D.cooling
     c1, c2 = st.columns(2, gap="medium")
     with c1:
@@ -209,8 +220,29 @@ def cooling_tab(flow_total: float) -> Cooling:
         coil_Q = qw("number", "Design cooling power", "coil_Q", "power", c.coil_Q_design, 1_000, 2_000_000,
                     si_scale=1e-3)
         coil_Ts = qw("number", "Design supply air temp", "coil_Ts", "temp", c.coil_T_supply_design, -60, 0)
-        coil_Tr = qw("number", "Design return air temp", "coil_Tr", "temp", c.coil_T_return_design, -60, 10)
         coil_SST = qw("number", "Design SST", "coil_SST", "temp", c.coil_SST_design, -70, 0)
+        driver = st.segmented_control("Set by", ["Return air", "Airflow"], default="Return air",
+                                      key="w::coil_driver", help="The other value is calculated from the "
+                                      "design cooling power and the air temperature drop across the coil.")
+        driver = driver or "Return air"
+        if driver == "Return air":
+            Tr = qw("number", "Design return air temp", "coil_Tr", "temp", c.coil_T_return_design, -60, 10)
+            if Tr <= coil_Ts:
+                st.error("Return air must be warmer than supply air.")
+                Tr = coil_Ts + 0.1
+            airflow = coil_airflow(coil_Q, coil_Ts, Tr)
+            ss["si::coil_flow"] = airflow
+            _forget_widget("coil_flow")
+            _readonly("Airflow", "flow", airflow)
+        else:
+            airflow = qw("number", "Airflow", "coil_flow", "flow", c.airflow, 0.5, 200)
+            Tr = coil_return(coil_Q, coil_Ts, airflow)
+            ss["si::coil_Tr"] = Tr
+            _forget_widget("coil_Tr")
+            _readonly("Design return air temp", "temp", Tr)
+        fan_spec = qw("number", "Fan power", "fan_spec", "fanspec", c.fan_specific_power, 0, 10_000, si_scale=1e-3)
+        st.caption(f"Fans: {cv('power', fan_spec * airflow / 1000):,.1f} {ul('power')} of heat "
+                   f"({fan_spec * airflow / 745.7:,.0f} hp)")
     with c2:
         st.markdown("**Refrigeration system (design point)**")
         ref_Q = qw("number", "Design refrigeration power", "ref_Q", "power", c.ref_Q_design, 1_000, 2_000_000,
@@ -218,32 +250,29 @@ def cooling_tab(flow_total: float) -> Cooling:
         ref_SST = qw("number", "Design SST", "ref_SST", "temp", c.ref_SST_design, -70, 0)
         refr = st.selectbox("Refrigerant", REFRIGERANT_CHOICES, index=REFRIGERANT_CHOICES.index(c.refrigerant),
                             key="w::refrigerant")
-    cooling = Cooling(coil_Q, coil_Ts, coil_Tr, coil_SST, ref_Q, ref_SST, refr)
+        st.markdown("**Controls**")
+        SST_max = qw("number", "Max SST", "SST_max", "temp", c.SST_max, -70, 10,
+                     help="The plant holds suction at or below this. Above it, the coil gets the capacity it needs.")
+        T_set = qw("number", "Return air setpoint", "T_set", "temp", c.T_return_setpoint, -70, 0,
+                   help="Return air is not allowed below this (frost). Once reached, capacity is reduced "
+                        "to hold it while the pallets finish freezing.")
+    cooling = Cooling(coil_Q_design=coil_Q, coil_T_supply_design=coil_Ts, coil_SST_design=coil_SST,
+                      airflow=airflow, fan_specific_power=fan_spec, ref_Q_design=ref_Q, ref_SST_design=ref_SST,
+                      refrigerant=refr, SST_max=SST_max, T_return_setpoint=T_set)
 
-    # derived design numbers
     try:
-        coil = Coil(coil_Q, coil_Ts, coil_Tr, coil_SST)
+        coil = Coil(coil_Q, coil_Ts, Tr, coil_SST)
         ref = RefSystem(ref_Q, ref_SST, refr)
     except ValueError as e:
         st.error(str(e))
         return cooling
-    C_air = flow_total * air_density(coil_Ts) * D.air.cp
-    flow_d = coil.design_C_air / D.air.cp / air_density(coil_Ts)
-    bal = design_return_balance(coil, ref, C_air)
+    bal = design_return_balance(coil, ref, coil.design_C_air)
     T = lambda v: f"{cv('temp', v):.1f} {ul('temp')}"
     P = lambda w: f"{cv('power', w / 1000):,.1f} {ul('power')}"
-    d1, d2 = st.columns(2, gap="medium")
-    d1.caption(f"Coil UA {cv('ua', coil.UA / 1000):,.{2 if units() == U.SI else 0}f} {ul('ua')} · "
-               f"design airflow {cv('flow', flow_d):,.{1 if units() == U.SI else 0}f} {ul('flow')} "
-               f"(cell: {cv('flow', flow_total):,.{1 if units() == U.SI else 0}f})")
-    d2.caption(f"{refr} · compressor displacement {cv('flow', ref.displacement):,.{3 if units() == U.SI else 0}f} "
-               f"{ul('flow')} · {P(float(ref.capacity(coil_SST)))} at coil design SST")
-    st.caption(f"At the coil design return air ({T(coil_Tr)}) and the cell airflow, the system balances at "
-               f"SST {T(bal.SST)}, supply air {T(bal.T_supply)}, {P(bal.Q)}.")
-    if abs(flow_total / flow_d - 1) > 0.2:
-        st.warning("Cell airflow differs from the airflow implied by the coil design point "
-                   "(design power ÷ air temperature drop), so the coil won't deliver its design "
-                   "power at the design return temperature.")
+    st.caption(f"Coil UA {cv('ua', coil.UA / 1000):,.{2 if units() == U.SI else 0}f} {ul('ua')} · "
+               f"{refr} compressor displacement {cv('flow', ref.displacement):,.{3 if units() == U.SI else 0}f} "
+               f"{ul('flow')} · at the design return air, coil and refrigeration meet at SST {T(bal.SST)}, "
+               f"supply air {T(bal.T_supply)}, {P(bal.Q)} (before fan heat and controls).")
     return cooling
 
 
@@ -285,14 +314,14 @@ with left:
         sim, htc, reduction = model_tab()
     with t_pal:
         product, pkg, load, T0, Tt = pallet_tab()
-    with t_cell:
-        cell, flow_total = cell_tab()
     with t_cool:
-        cooling = cooling_tab(flow_total)
+        cooling = cooling_tab()
+    with t_cell:
+        cell = cell_tab(cooling.airflow)
     with t_boost:
         st.info("Boost inputs will go here.")
     sim.T_start, sim.T_target = T0, Tt
-    air = Air(flow_total, htc, reduction, D.air.cp)
+    air = Air(htc, reduction, D.air.cp)
     scenario = Scenario(product, pkg, load, air, cell, sim, cooling)
 
     if load.use_spacers and pkg.package_height > load.height / (load.n_spacers + 1) * 1.001:
@@ -316,7 +345,7 @@ with right:
     if stale:
         st.info("Inputs changed since the last solve. Showing the last solution; click **Run solver** to update.")
     c = shown.cell
-    flow_text = f"{cv('flow', shown.air.flow_total):,.1f} {ul('flow')}"
+    flow_text = f"{cv('flow', shown.cooling.airflow):,.{1 if units() == U.SI else 0}f} {ul('flow')}"
     if res is None:
         n_ser = {"bottom": c.n_high, "top": c.n_high, "left": c.n_wide, "right": c.n_wide}[c.inlet_face]
         T_frames, times, T_in, T_out = [[shown.sim.T_start] * n_ser], [0.0], [None], [None]
@@ -342,7 +371,7 @@ with right:
         fmt_h = lambda t: "—" if t is None else f"{t:.1f} h"
         m[0].metric("Cell frozen (last pallet)", fmt_h(summ["cell_freeze_time_h"]))
         m[1].metric("First pallet frozen", fmt_h(summ["first_freeze_time_h"]))
-        m[2].metric("Peak cooling", f"{cv('power', summ['peak_cell_kW']):,.0f} {ul('power')}")
+        m[2].metric("Peak coil load", f"{cv('power', summ['peak_coil_kW']):,.0f} {ul('power')}")
         m[3].metric("Energy removed", f"{cv('energy', summ['energy_removed_kWh']):,.0f} {ul('energy')}")
         if not summ["all_frozen"]:
             st.warning(f"Not every pallet reached the target within {summ['sim_end_h']:.0f} h "
@@ -360,8 +389,7 @@ else:
                    "Surface node = outermost finite volume.")
     with t_pow:
         st.plotly_chart(power_figure(res, cv, ul, design_kW=shown.cooling.ref_Q_design / 1000), width="stretch")
-        st.caption("Cooling power = coil load = refrigeration capacity at the balanced SST. "
-                   "Fan power is not modeled yet.")
+        st.caption("Cooling power = coil load = pallet load + fan heat. Fan power is fully added to the air.")
 
     with st.expander("Model details & data"):
         info = res.info

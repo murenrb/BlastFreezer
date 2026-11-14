@@ -128,23 +128,34 @@ class RefSystem:
 @dataclass(frozen=True)
 class Balance:
     SST: float
-    T_supply: float
-    T_return: float
-    Q: float                 # W, coil = refrigeration = air-side
-    limited: str             # "" | "SST floor" | "SST ceiling"
+    T_supply: float          # air entering the pallets (coil outlet + fan heat)
+    T_return: float          # air leaving the pallets = entering the coil
+    Q: float                 # W, coil load (= pallet load + fan heat)
+    limited: str = ""        # "" | "SST max" | "return setpoint" | "SST floor" | "SST ceiling"
+    T_coil_out: float = float("nan")
+    Q_fan: float = 0.0
 
 
-def solve_balance(a: float, b: float, C_air: float, coil: Coil, ref: RefSystem) -> Balance:
-    """Close coil + refrigeration + load with return air T_r = a + b * T_s."""
+def solve_balance(a: float, b: float, C_air: float, coil: Coil, ref: RefSystem, *,
+                  fan_W: float = 0.0, SST_max: float | None = None,
+                  T_return_min: float | None = None) -> Balance:
+    """Close coil + refrigeration + load, with cell return air T_r = a + b * T_supply.
+
+    Fan heat is added to the air leaving the coil (dT = fan_W / C_air).
+    SST_max: the plant holds suction at or below this; above it the coil gets what it needs.
+    T_return_min: return air setpoint; when the free balance would go colder, capacity is
+    reduced (SST rises) to hold the return air at the setpoint.
+    """
     eps = coil.effectiveness(C_air)
+    d = fan_W / C_air
+    a2 = a + b * d                       # return air as a function of coil outlet: T_r = a2 + b T_c
     den = 1.0 - (1.0 - eps) * b
 
-    def T_s(sst):
-        return ((1.0 - eps) * a + eps * sst) / den
+    def T_c(sst):
+        return ((1.0 - eps) * a2 + eps * sst) / den
 
     def f(sst):
-        Ts = T_s(sst)
-        return C_air * (a + (b - 1.0) * Ts) - float(ref.capacity(sst))
+        return C_air * (a2 + (b - 1.0) * T_c(sst)) - float(ref.capacity(sst))
 
     lo, hi = ref.SST_min, ref.SST_max
     limited = ""
@@ -154,11 +165,19 @@ def solve_balance(a: float, b: float, C_air: float, coil: Coil, ref: RefSystem) 
         sst, limited = hi, "SST ceiling"
     else:
         sst = brentq(f, lo, hi, xtol=1e-6)
-    Ts = T_s(sst)
-    Tr = a + b * Ts
-    return Balance(float(sst), float(Ts), float(Tr), float(C_air * (Tr - Ts)), limited)
+    if SST_max is not None and sst > SST_max:
+        sst, limited = SST_max, "SST max"
+    Tc = T_c(sst)
+    Tr = a2 + b * Tc
+    if T_return_min is not None and Tr < T_return_min:
+        Tr = T_return_min
+        Tc = (Tr - a2) / b
+        sst = (Tc - (1.0 - eps) * Tr) / eps
+        limited = "return setpoint"
+    return Balance(float(sst), float(Tc + d), float(Tr), float(C_air * (Tr - Tc)), limited,
+                   float(Tc), float(fan_W))
 
 
 def design_return_balance(coil: Coil, ref: RefSystem, C_air: float) -> Balance:
-    """Balance with return air held at the coil's design return temperature."""
+    """Coil vs refrigeration only: return air held at the coil's design return, no fans or controls."""
     return solve_balance(coil.T_return_design, 0.0, C_air, coil, ref)

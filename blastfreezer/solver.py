@@ -10,8 +10,8 @@ import pandas as pd
 from .cell import Cell
 from .config import Scenario
 
-CELL_COLUMNS = ["time_h", "T_air_in", "T_air_out", "Q_cell_kW", "fan_kW", "SST", "limit",
-                "n_frozen_positions"]
+CELL_COLUMNS = ["time_h", "T_air_in", "T_air_out", "Q_cell_kW", "Q_coil_kW", "fan_kW", "SST", "T_coil_out",
+                "limit", "n_frozen_positions"]
 PALLET_COLUMNS = ["time_h", "position", "T_core", "T_surface", "T_mean", "T_air_in", "T_air_out",
                   "Q_kW", "frozen_fraction", "front_depth_mm"]
 
@@ -42,8 +42,8 @@ def simulate(s: Scenario) -> Result:
         times.append(th)
         n_frozen = sum(p.t_frozen is not None for p in lane.pallets)
         bal = cell.balance        # balance used for the step just taken (T_air_in = coil supply air)
-        cell_rows.append((th, bal.T_supply, cell.T_air_out, cell.Q / 1000.0, 0.0,  # fans: TBD
-                          bal.SST, bal.limited, n_frozen))
+        cell_rows.append((th, bal.T_supply, cell.T_air_out, cell.Q / 1000.0, bal.Q / 1000.0,
+                          bal.Q_fan / 1000.0, bal.SST, bal.T_coil_out, bal.limited, n_frozen))
         for i, p in enumerate(lane.pallets):
             Q = p.Q_now if initial else p.Q
             T_out = p.T_air_out if initial else p.T_air_out_step
@@ -117,6 +117,8 @@ def summarize(r: Result, s: Scenario) -> dict:
         "cell_freeze_time_h": max(done) if len(done) == len(ft) else None,
         "first_freeze_time_h": min(done) if done else None,
         "peak_cell_kW": float(r.cell["Q_cell_kW"].max()),
+        "peak_coil_kW": float(r.cell["Q_coil_kW"].max()),
+        "fan_kW": float(r.cell["fan_kW"].iloc[-1]),
         "energy_removed_kWh": r.info["energy_removed_kWh"],
         "sim_end_h": float(r.cell["time_h"].iloc[-1]),
     }

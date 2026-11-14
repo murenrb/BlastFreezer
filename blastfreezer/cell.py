@@ -64,7 +64,7 @@ def air_path(s: Scenario) -> AirPath:
         alignment = "across channels"
         h = a.htc * (1.0 - a.spacer_htc_reduction)
 
-    flow_total = a.flow_total
+    flow_total = s.cooling.airflow
     m_dot_total = air_density(s.cooling.T_air_reference) * flow_total
     return AirPath(axis, c.inlet_face, OPPOSITE[c.inlet_face], n_series, n_lanes, alignment, h,
                    flow_total, m_dot_total, m_dot_total / n_lanes)
@@ -137,7 +137,7 @@ class Cell:
         for l in self.lanes:
             l.T_in = self.balance.T_supply
             l.update_air()
-        self.Q = self.balance.Q
+        self.Q = self.balance.Q - self.balance.Q_fan     # pallet load
 
     def _linear_return(self) -> tuple[float, float]:
         """Mixed cell return air T_r = a + b * T_supply."""
@@ -154,8 +154,10 @@ class Cell:
         if self.fixed:
             Ts = self.s.cooling.fixed_supply_T
             Tr = a + b * Ts
-            return Balance(float("nan"), Ts, Tr, self.C_air * (Tr - Ts), "fixed supply")
-        return solve_balance(a, b, self.C_air, self.coil, self.ref)
+            return Balance(float("nan"), Ts, Tr, self.C_air * (Tr - Ts), "fixed supply", Ts, 0.0)
+        c = self.s.cooling
+        return solve_balance(a, b, self.C_air, self.coil, self.ref, fan_W=c.fan_power,
+                             SST_max=c.SST_max, T_return_min=c.T_return_setpoint)
 
     @property
     def pallets(self):

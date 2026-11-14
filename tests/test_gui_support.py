@@ -101,4 +101,4 @@ def test_time_series_figures_build():
     s.cell.inlet_face = "bottom"          # 3 pallets in series -> distinct warmest / coldest
     r = simulate(s)
     assert len(temperature_figure(r, s.sim.T_target, cv, ul).data) == 7      # incl. SST
-    assert len(power_figure(r, cv, ul).data) == 2
+    assert len(power_figure(r, cv, ul).data) == 3

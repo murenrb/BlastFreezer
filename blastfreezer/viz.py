@@ -207,7 +207,7 @@ def temperature_figure(res, T_target: float, cv: Callable, ul: Callable, height:
         fig.add_trace(go.Scatter(x=prof.index, y=cv("temp", prof.iloc[:, -1].values),
                                  name=f"{label} (P{pos}) surface node", line=dict(color=color, dash="dash")))
     C = res.cell
-    fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_air_in), name="Air in (coil supply)",
+    fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_air_in), name="Air in (after coil + fans)",
                              line=dict(color="#5a6b7b", dash="dot")))
     fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_air_out), name="Air out (coil return)",
                              line=dict(color="#2b3a4a", dash="dashdot")))
@@ -223,8 +223,11 @@ def power_figure(res, cv: Callable, ul: Callable, height: int = 420,
                  design_kW: float | None = None) -> go.Figure:
     C = res.cell
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", C.Q_cell_kW), name="Cooling power",
+    coil = C["Q_coil_kW"] if "Q_coil_kW" in C else C.Q_cell_kW
+    fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", coil), name="Cooling power (coil)",
                              line=dict(color="#1f5fbf", width=2.5)))
+    fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", C.Q_cell_kW), name="Pallet load",
+                             line=dict(color="#8b4fd6", width=1.5, dash="dash")))
     if design_kW is not None:
         fig.add_hline(y=cv("power", design_kW), line_dash="dot", line_color="#888",
                       annotation_text="Refrigeration design")

@@ -38,7 +38,7 @@ def _solid_block_scenario(shape: str, dims, n_nodes=40, T_freeze=-200.0, water=0
     s.load.length, s.load.width, s.load.height = L, W, H
     s.load.mass = rho * L * W * H
     s.air.htc = h
-    s.air.flow_total = 1e6
+    s.cooling.airflow = 1e6
     s.sim.n_nodes = n_nodes
     return s
 

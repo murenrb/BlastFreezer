@@ -56,8 +56,45 @@ def test_cell_return_matches_linear_prediction():
     cell = Cell(s)
     for _ in range(50):
         cell.step(cell.dt_stable)
-        assert cell.T_air_out == pytest.approx(cell.balance.T_return, abs=1e-9)
-        assert cell.Q == pytest.approx(cell.balance.Q, rel=1e-9)
+        bal = cell.balance
+        assert cell.T_air_out == pytest.approx(bal.T_return, abs=1e-9)
+        assert cell.Q + bal.Q_fan == pytest.approx(bal.Q, rel=1e-9)       # coil = pallets + fan heat
+        assert bal.T_supply - bal.T_coil_out == pytest.approx(bal.Q_fan / cell.C_air)
+
+
+def test_airflow_and_design_return_are_linked():
+    from blastfreezer.config import Cooling, coil_airflow
+    c = Cooling()
+    assert c.coil_T_return_design == pytest.approx(_F(-12.0))
+    assert coil_airflow(c.coil_Q_design, c.coil_T_supply_design, c.coil_T_return_design) == \
+        pytest.approx(c.airflow)
+    assert c.fan_power == pytest.approx(745.7 * c.airflow * 2118.880003 / 1000)   # 1 hp per 1000 CFM
+
+
+def test_sst_max_caps_suction():
+    c, r = _coil(), RefSystem(32 * TON, _F(-30), "NH3")
+    free = solve_balance(5.0, 0.5, c.design_C_air, c, r)
+    capped = solve_balance(5.0, 0.5, c.design_C_air, c, r, SST_max=free.SST - 3.0)
+    assert capped.SST == pytest.approx(free.SST - 3.0) and capped.limited == "SST max"
+    assert capped.Q > free.Q                    # plant supplies more to hold suction down
+
+
+def test_return_setpoint_holds_return_air():
+    c, r = _coil(), RefSystem(32 * TON, _F(-30), "NH3")
+    a, b = -40.0, 0.9                           # light load: free balance would go very cold
+    free = solve_balance(a, b, c.design_C_air, c, r)
+    held = solve_balance(a, b, c.design_C_air, c, r, T_return_min=free.T_return + 2.0)
+    assert held.T_return == pytest.approx(free.T_return + 2.0)
+    assert held.SST > free.SST and held.limited == "return setpoint"
+    assert held.Q == pytest.approx(c.design_C_air * (held.T_return - held.T_coil_out))
+
+
+def test_default_run_respects_controls():
+    s = Scenario()
+    C = simulate(s).cell
+    assert C.T_air_out.min() >= s.cooling.T_return_setpoint - 1e-6
+    assert C.SST.max() <= s.cooling.SST_max + 1e-6
+    assert (C.limit == "return setpoint").any()
 
 
 def test_more_refrigeration_freezes_faster():

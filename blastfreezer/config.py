@@ -85,7 +85,6 @@ class PalletLoad:
 
 @dataclass
 class Air:
-    flow_total: float = 32.0               # m^3/s, total cell airflow, split evenly across lanes
     htc: float = 30.0                      # W/m^2-K, surface HTC with air flowing freely
     spacer_htc_reduction: float = 0.9      # HTC reduction when airflow is perpendicular to the spacers
     cp: float = 1006.0                     # J/kg-K
@@ -95,22 +94,56 @@ def _F(f: float) -> float:
     return (f - 32.0) / 1.8
 
 
+CP_AIR = 1006.0                            # J/kg-K
+HP = 745.7                                 # W
+CFM = 1.0 / 2118.880003                    # m^3/s
+
+
+def rho_air(T_c: float) -> float:
+    return 101_325.0 / (287.05 * (T_c + 273.15))
+
+
+def coil_airflow(Q: float, T_supply: float, T_return: float) -> float:
+    """Airflow [m^3/s at supply temperature] that carries Q across the coil air temperature drop."""
+    return Q / (CP_AIR * rho_air(T_supply) * (T_return - T_supply))
+
+
+def coil_return(Q: float, T_supply: float, airflow: float) -> float:
+    return T_supply + Q / (CP_AIR * rho_air(T_supply) * airflow)
+
+
 TON = 3516.853                             # W per ton of refrigeration
 REFRIGERANT_CHOICES = ("NH3", "CO2", "R404A", "R134a")
 
 
 @dataclass
 class Cooling:
-    """Coil and refrigeration system. Supply air comes from the coil/refrigeration balance."""
+    """Coil, fans and refrigeration system. Supply air comes from the balance each step.
+
+    The coil design return air and the airflow are linked by the design power:
+    airflow = Q / (cp * rho(T_supply) * (T_return - T_supply)). Airflow is stored;
+    the design return air is derived from it.
+    """
 
     coil_Q_design: float = 32 * TON        # W
     coil_T_supply_design: float = _F(-20.0)  # degC, air leaving the coil
-    coil_T_return_design: float = _F(0.0)    # degC, air entering the coil
     coil_SST_design: float = _F(-30.0)       # degC
+    airflow: float = coil_airflow(32 * TON, _F(-20.0), _F(-12.0))  # m^3/s at supply temp (fixed)
+    fan_specific_power: float = HP / (1000 * CFM)  # W per m^3/s (1 hp per 1000 CFM); heat goes to the air
     ref_Q_design: float = 32 * TON         # W, refrigeration capacity at design SST
     ref_SST_design: float = _F(-30.0)      # degC
     refrigerant: str = "NH3"
+    SST_max: float = _F(-20.0)             # degC, plant holds suction at or below this
+    T_return_setpoint: float = _F(-30.0)   # degC, return air is not allowed below this (frost)
     fixed_supply_T: float | None = None    # degC; if set, bypasses the coil (verification/comparison)
+
+    @property
+    def coil_T_return_design(self) -> float:
+        return coil_return(self.coil_Q_design, self.coil_T_supply_design, self.airflow)
+
+    @property
+    def fan_power(self) -> float:
+        return self.fan_specific_power * self.airflow if self.fixed_supply_T is None else 0.0
 
     @property
     def T_air_reference(self) -> float:

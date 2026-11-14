@@ -57,8 +57,14 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 - Refrigeration: fixed compressor displacement sized at the design point; capacity at any SST =
   displacement * rho_g(SST) * h_fg(SST) (CoolProp; NH3, CO2, R404A, R134a). Liquid is assumed
   saturated at SST.
-- Each time step, with pallet states frozen, cell return air is linear in supply air, so coil load =
-  refrigeration capacity = pallet load is solved exactly for SST and supply air.
+- Coil airflow and design return air are linked by the design power (enter either one). Airflow
+  is fixed during the blast.
+- Fans: specific power input (default 1 hp per 1000 CFM); all fan power is added to the air
+  leaving the coil, so coil load = pallet load + fan heat.
+- Controls: the plant holds SST at or below a max SST (above it, the coil gets what it needs).
+  Return air is not allowed below a setpoint (frost); once reached, SST rises to hold it.
+- Each time step, with pallet states frozen, cell return air is linear in supply air, so the coil,
+  refrigeration, fans and pallets are balanced exactly for SST and supply air.
 
 ## Setup
 
@@ -81,11 +87,11 @@ Single pallet and series-flow cell in place.
 
 ## Current assumptions / deferred items
 
-- Supply air comes from the coil/refrigeration balance and is evenly distributed. Total airflow is
-  an input (fan input later), split evenly per lane; mass airflow is held constant.
+- Supply air comes from the coil/refrigeration balance and is evenly distributed. Airflow is set
+  on the coil, split evenly per lane; mass airflow is held constant.
 - Coil UA is constant (no airflow dependence, no frost). Compressor displacement is constant (no
-  volumetric-efficiency change, no motor limit, no capacity control), so SST floats with load.
-- No fan heat, wall, infiltration or defrost loads yet.
+  volumetric-efficiency change); max SST stands in for plant limits.
+- No wall, infiltration or defrost loads yet.
 - Air moves in straight lines from the inlet face to the opposite face (no turns).
 - Spacer channels are open in both horizontal directions by default.
 - Surface HTC is a constant input (better sources pending); the only change is the reduction

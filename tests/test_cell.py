@@ -82,7 +82,7 @@ def test_single_position_cell_matches_standalone_pallet():
 
 def test_downstream_pallets_freeze_later_and_across_is_slower():
     s = _spacers(Scenario())
-    s.air.flow_total = 8.0                  # low flow (1 m^3/s per lane) so air warming is visible
+    s.cooling.airflow = 8.0                 # low flow (1 m^3/s per lane) so air warming is visible
     s.cell.n_deep, s.cell.n_wide, s.cell.n_high = 2, 4, 4
     s.cell.inlet_face = "bottom"            # 2 x 4 x 4: 8 lanes of 4
     across = simulate(s)

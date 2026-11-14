@@ -60,7 +60,7 @@ class Pallet:
         T_ref = s.cooling.T_air_reference
         T_in = T_ref if T_in is None else T_in
         if m_dot is None:
-            m_dot = air_density(T_ref) * s.air.flow_total
+            m_dot = air_density(T_ref) * s.cooling.airflow
         self.set_air(T_in, m_dot, s.air.htc if h is None else h)
         self.dt_stable = self._stable_dt()
 
