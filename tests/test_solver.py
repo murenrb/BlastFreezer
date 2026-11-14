@@ -58,7 +58,7 @@ def test_conduction_matches_analytic(shape):
     T0, Tinf, k, h, C = 10.0, -40.0, 0.5, 30.0, 1000.0 * 3000.0
     dims = (0.2, 2.0, 2.0) if shape == "plate" else (0.6, 0.6, 0.6)
     s = _solid_block_scenario(shape, dims, n_nodes=40, k=k, h=h)
-    s.sim.T_start, s.air.T_in = T0, Tinf
+    s.sim.T_start, s.cooling.fixed_supply_T = T0, Tinf
     p = Pallet(s)
     R = p.body.R
     Bi, alpha = h * R / k, k / C
@@ -89,7 +89,7 @@ def test_plank_freezing_time_plate():
     Tf, Ta, k, h = -1.0, -41.0, 1.4, 30.0
     s = _solid_block_scenario("plate", (0.1, 2.0, 2.0), n_nodes=40, T_freeze=Tf, water=1.0,
                               cp_frozen=100.0, k=k, h=h)
-    s.air.T_in = Ta
+    s.cooling.fixed_supply_T = Ta
     s.sim.T_start = Tf + 1e-6
     p = Pallet(s)
     a = 0.1

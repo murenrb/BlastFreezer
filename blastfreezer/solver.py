@@ -10,7 +10,8 @@ import pandas as pd
 from .cell import Cell
 from .config import Scenario
 
-CELL_COLUMNS = ["time_h", "T_air_in", "T_air_out", "Q_cell_kW", "fan_kW", "n_frozen_positions"]
+CELL_COLUMNS = ["time_h", "T_air_in", "T_air_out", "Q_cell_kW", "fan_kW", "SST", "limit",
+                "n_frozen_positions"]
 PALLET_COLUMNS = ["time_h", "position", "T_core", "T_surface", "T_mean", "T_air_in", "T_air_out",
                   "Q_kW", "frozen_fraction", "front_depth_mm"]
 
@@ -40,7 +41,9 @@ def simulate(s: Scenario) -> Result:
         th = cell.t / 3600.0
         times.append(th)
         n_frozen = sum(p.t_frozen is not None for p in lane.pallets)
-        cell_rows.append((th, s.air.T_in, cell.T_air_out, cell.Q / 1000.0, 0.0, n_frozen))  # fans: TBD
+        bal = cell.balance        # balance used for the step just taken (T_air_in = coil supply air)
+        cell_rows.append((th, bal.T_supply, cell.T_air_out, cell.Q / 1000.0, 0.0,  # fans: TBD
+                          bal.SST, bal.limited, n_frozen))
         for i, p in enumerate(lane.pallets):
             Q = p.Q_now if initial else p.Q
             T_out = p.T_air_out if initial else p.T_air_out_step
@@ -74,6 +77,8 @@ def simulate(s: Scenario) -> Result:
         "NTU": p0.NTU, "eps": p0.eps, "flow_total_m3s": path.flow_total,
         "m_dot_total": path.m_dot_total, "m_dot_lane": path.m_dot_lane,
         "flow_lane_m3s": path.flow_total / path.n_lanes,
+        # cooling
+        **_cooling_info(cell, s),
         # numerics
         "dt_s": dt, "dt_stable_s": cell.dt_stable, "n_steps": i, "n_nodes": p0.grid.n,
         "dx_mm": p0.grid.dx * 1000.0,
@@ -83,6 +88,25 @@ def simulate(s: Scenario) -> Result:
     freeze = [None if p.t_frozen is None else p.t_frozen / 3600.0 for p in lane.pallets]
     return Result(pd.DataFrame(cell_rows, columns=CELL_COLUMNS),
                   pd.DataFrame(pal_rows, columns=PALLET_COLUMNS), profiles, freeze, info)
+
+
+def _cooling_info(cell: Cell, s: Scenario) -> dict:
+    if cell.fixed:
+        return {"cooling_mode": "fixed supply"}
+    from .refrigeration import design_return_balance
+    coil, ref = cell.coil, cell.ref
+    from .pallet import air_density
+    bal = design_return_balance(coil, ref, cell.C_air)
+    return {
+        "cooling_mode": "coil",
+        "coil_UA_W_K": coil.UA, "coil_LMTD": coil.LMTD,
+        "coil_design_flow_m3s": coil.design_C_air / s.air.cp / air_density(coil.T_supply_design),
+        "coil_eps": coil.effectiveness(cell.C_air),
+        "ref_displacement_m3s": ref.displacement,
+        "ref_capacity_at_coil_SST_kW": float(ref.capacity(coil.SST_design)) / 1000.0,
+        "design_return_SST": bal.SST, "design_return_T_supply": bal.T_supply,
+        "design_return_Q_kW": bal.Q / 1000.0,
+    }
 
 
 def summarize(r: Result, s: Scenario) -> dict:

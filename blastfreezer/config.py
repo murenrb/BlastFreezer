@@ -85,11 +85,37 @@ class PalletLoad:
 
 @dataclass
 class Air:
-    T_in: float = -45.0                    # degC, air entering the cell (constant, even)
     flow_total: float = 32.0               # m^3/s, total cell airflow, split evenly across lanes
     htc: float = 30.0                      # W/m^2-K, surface HTC with air flowing freely
     spacer_htc_reduction: float = 0.9      # HTC reduction when airflow is perpendicular to the spacers
     cp: float = 1006.0                     # J/kg-K
+
+
+def _F(f: float) -> float:
+    return (f - 32.0) / 1.8
+
+
+TON = 3516.853                             # W per ton of refrigeration
+REFRIGERANT_CHOICES = ("NH3", "CO2", "R404A", "R134a")
+
+
+@dataclass
+class Cooling:
+    """Coil and refrigeration system. Supply air comes from the coil/refrigeration balance."""
+
+    coil_Q_design: float = 32 * TON        # W
+    coil_T_supply_design: float = _F(-20.0)  # degC, air leaving the coil
+    coil_T_return_design: float = _F(0.0)    # degC, air entering the coil
+    coil_SST_design: float = _F(-30.0)       # degC
+    ref_Q_design: float = 32 * TON         # W, refrigeration capacity at design SST
+    ref_SST_design: float = _F(-30.0)      # degC
+    refrigerant: str = "NH3"
+    fixed_supply_T: float | None = None    # degC; if set, bypasses the coil (verification/comparison)
+
+    @property
+    def T_air_reference(self) -> float:
+        """Temperature used to turn volumetric airflow into mass flow."""
+        return self.fixed_supply_T if self.fixed_supply_T is not None else self.coil_T_supply_design
 
 
 CELL_FACES = ("bottom", "top", "front", "back", "left", "right")
@@ -127,6 +153,7 @@ class Scenario:
     air: Air = field(default_factory=Air)
     cell: Cell = field(default_factory=Cell)
     sim: SimSettings = field(default_factory=SimSettings)
+    cooling: Cooling = field(default_factory=Cooling)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -140,4 +167,5 @@ class Scenario:
             air=Air(**d.get("air", {})),
             cell=Cell(**d.get("cell", {})),
             sim=SimSettings(**d.get("sim", {})),
+            cooling=Cooling(**d.get("cooling", {})),
         )

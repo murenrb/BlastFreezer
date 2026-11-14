@@ -57,9 +57,10 @@ class Pallet:
         self.T_air_out_step = None
         self.t_frozen = None      # s, when the core first reached T_target
 
-        T_in = s.air.T_in if T_in is None else T_in
+        T_ref = s.cooling.T_air_reference
+        T_in = T_ref if T_in is None else T_in
         if m_dot is None:
-            m_dot = air_density(s.air.T_in) * s.air.flow_total
+            m_dot = air_density(T_ref) * s.air.flow_total
         self.set_air(T_in, m_dot, s.air.htc if h is None else h)
         self.dt_stable = self._stable_dt()
 
@@ -132,6 +133,13 @@ class Pallet:
         if H0 > m.L_vol:
             return m.T_freeze + (H0 - m.L_vol) / m.C_unfrozen
         return m.T_freeze
+
+    def surface_coupling(self) -> tuple[float, float]:
+        """(G, T_N): heat to air = G * (T_N - T_air_in) for the whole pallet, at the current state."""
+        T, f = self.mat.state(self.H[-1:])
+        k = self.mat.k(f[0])
+        G = self.grid.A_surface / (self.grid.dx / (2 * k) + self.R_film) * self.scale
+        return G, float(T[0])
 
     def _surface_flux(self, T, f) -> float:
         """Heat flow to the air at the current state, per unit body [W]."""

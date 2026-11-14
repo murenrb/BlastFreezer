@@ -62,7 +62,7 @@ def test_air_warms_by_heat_removed_along_lane():
     lane = c.lanes[0]
     for _ in range(200):
         Q = lane.step(c.dt_stable)
-        assert lane.T_out - s.air.T_in == pytest.approx(Q / (lane.m_dot * s.air.cp), rel=1e-9)
+        assert lane.T_out - lane.T_in == pytest.approx(Q / (lane.m_dot * s.air.cp), rel=1e-9)
         for up, down in zip(lane.pallets, lane.pallets[1:]):
             assert down.T_air_in == pytest.approx(up.T_air_out_step)
 
@@ -71,6 +71,7 @@ def test_single_position_cell_matches_standalone_pallet():
     s = _spacers(Scenario())
     s.cell.n_deep = s.cell.n_wide = s.cell.n_high = 1
     s.cell.inlet_face = "front"          # along spacer channels -> full h, same as standalone
+    s.cooling.fixed_supply_T = -45.0     # constant supply air, like the standalone pallet
     r = simulate(s)
     p = Pallet(s)
     dt = min(s.sim.dt_max, p.dt_stable)

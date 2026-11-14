@@ -69,7 +69,7 @@ N_SERIES = {"bottom": 4, "top": 4, "left": 3, "right": 3}
 
 @pytest.mark.parametrize("face", GUI_FACES)
 def test_cell_figure_draws_every_pallet(face):
-    fig = cell_figure(2, 3, 4, face, [list(range(N_SERIES[face]))], [0.0], [None], 11, -17, cv, ul, -45)
+    fig = cell_figure(2, 3, 4, face, [list(range(N_SERIES[face]))], [0.0], [None], 11, -17, cv, ul, [None])
     fills = [t for t in fig.data if t.fill == "toself"]
     assert len(fills) == 2 * 3 * 4
     assert len([a for a in fig.layout.annotations if a.showarrow]) == 2
@@ -80,7 +80,8 @@ def test_cell_figure_animation_frames():
     n_t, face = 500, "left"
     T = np.linspace(11, -20, n_t)[:, None] + np.zeros((1, N_SERIES[face]))
     times = list(np.linspace(0, 25, n_t))
-    fig = cell_figure(2, 3, 4, face, T, times, list(np.full(n_t, -44.0)), 11, -17, cv, ul, -45)
+    fig = cell_figure(2, 3, 4, face, T, times, list(np.full(n_t, -44.0)), 11, -17, cv, ul,
+                      list(np.full(n_t, -45.0)))
     assert 2 <= len(fig.frames) <= 240
     assert len(fig.layout.sliders[0].steps) == len(fig.frames)
     first, last = fig.frames[0], fig.frames[-1]
@@ -90,7 +91,7 @@ def test_cell_figure_animation_frames():
 
 def test_cell_figure_rejects_depth_flow():
     with pytest.raises(ValueError):
-        cell_figure(2, 3, 4, "front", [[0, 0]], [0.0], [None], 11, -17, cv, ul, -45)
+        cell_figure(2, 3, 4, "front", [[0, 0]], [0.0], [None], 11, -17, cv, ul, [None])
 
 
 def test_time_series_figures_build():
@@ -99,5 +100,5 @@ def test_time_series_figures_build():
     s.cell.n_deep, s.cell.n_wide, s.cell.n_high = 1, 1, 3
     s.cell.inlet_face = "bottom"          # 3 pallets in series -> distinct warmest / coldest
     r = simulate(s)
-    assert len(temperature_figure(r, s.sim.T_target, cv, ul).data) == 6
+    assert len(temperature_figure(r, s.sim.T_target, cv, ul).data) == 7      # incl. SST
     assert len(power_figure(r, cv, ul).data) == 2

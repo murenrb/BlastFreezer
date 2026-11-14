@@ -11,7 +11,8 @@ blastfreezer/
   units.py              SI <-> Imperial display conversions (model is SI internally)
   foods.py              Product property library (ASHRAE / proposal generator, Choi-Okos k and density)
   viz.py                Plotly figures: cell view, temperature and power time series
-  cell.py               Cell of pallet positions; lanes of pallets in series along the airflow
+  cell.py               Cell of pallet positions; lanes of pallets in series; coil/ref balance per step
+  refrigeration.py      Coil (UA from design point) and fixed-displacement refrigeration (CoolProp)
   geometry.py           Pallet -> 1-D representative body (plate / sphere / cylinder) + FV grid
   materials.py          Homogenized packed-product properties, enthalpy <-> temperature
   pallet.py             Pallet class: explicit-Euler finite-volume enthalpy solver
@@ -50,6 +51,15 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
   channels) reduces the HTC by an input percentage (default 90 %).
 - Runs until every pallet core reaches the target.
 
+**Cooling**
+- Coil: UA = design power / LMTD from the design supply, return and SST. At any condition the
+  refrigerant side is isothermal at SST: Q = eps * m_dot cp * (T_return - SST).
+- Refrigeration: fixed compressor displacement sized at the design point; capacity at any SST =
+  displacement * rho_g(SST) * h_fg(SST) (CoolProp; NH3, CO2, R404A, R134a). Liquid is assumed
+  saturated at SST.
+- Each time step, with pallet states frozen, cell return air is linear in supply air, so coil load =
+  refrigeration capacity = pallet load is solved exactly for SST and supply air.
+
 ## Setup
 
 ```bash
@@ -71,12 +81,15 @@ Single pallet and series-flow cell in place.
 
 ## Current assumptions / deferred items
 
-- Inlet air temperature is constant and evenly distributed. Total airflow is an input; later it
-  will come from a fan input. It is split evenly per lane.
+- Supply air comes from the coil/refrigeration balance and is evenly distributed. Total airflow is
+  an input (fan input later), split evenly per lane; mass airflow is held constant.
+- Coil UA is constant (no airflow dependence, no frost). Compressor displacement is constant (no
+  volumetric-efficiency change, no motor limit, no capacity control), so SST floats with load.
+- No fan heat, wall, infiltration or defrost loads yet.
 - Air moves in straight lines from the inlet face to the opposite face (no turns).
 - Spacer channels are open in both horizontal directions by default.
 - Surface HTC is a constant input (better sources pending); the only change is the reduction
   applied when airflow is perpendicular to the spacers.
 - With spacers, pallet side faces are ignored (conservative, especially for flow across spacers).
 - All pallets start at the load-in temperature at t = 0, so the peak load is an initial spike.
-  Loading time and coil/refrigeration limits come with the coil model.
+  Loading time is not modeled.

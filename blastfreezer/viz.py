@@ -41,11 +41,12 @@ def _fmt_T(cv, T) -> str:
 
 def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
                 T_core_frames, times: Sequence[float], T_out_frames: Sequence,
-                T_hot: float, T_cold: float, cv: Callable, ul: Callable, T_air_in: float,
+                T_hot: float, T_cold: float, cv: Callable, ul: Callable, T_in_frames: Sequence,
                 flow_text: str = "", height: int = 560, max_frames: int = MAX_FRAMES) -> go.Figure:
     """Front view of the cell (width across, height up, depth stacked behind).
 
     T_core_frames: array (n_times, n_series) of core temperatures by series position.
+    T_in_frames / T_out_frames: cell supply / return air per time (None = unknown).
     With more than one time, the figure carries animation frames and its own time
     slider (plus play/pause), so stepping through the solution runs in the browser.
     """
@@ -92,10 +93,9 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
     W = (nh - 1) * pitch + size + (nd - 1) * off
     H = (nv - 1) * pitch + size + (nd - 1) * off
     in_xy, out_xy, label_pos = _arrows(inlet_face, W, H)
-    in_label = f"Air in {_fmt_T(cv, T_air_in)} {ul('temp')}" + (f"<br>{flow_text}" if flow_text else "")
-
-    def air_labels(T_out):
-        return [in_label, "Air out " + ("—" if T_out is None else f"{_fmt_T(cv, T_out)} {ul('temp')}")]
+    def air_labels(T_in, T_out):
+        f = lambda T: "—" if T is None else f"{_fmt_T(cv, T)} {ul('temp')}"
+        return ["Air in " + f(T_in) + (f"<br>{flow_text}" if flow_text else ""), "Air out " + f(T_out)]
 
     fig = go.Figure()
     T0 = T_core_frames[keep[0]]
@@ -111,7 +111,7 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
                              hovertext=hovers(T0, times[keep[0]]), hoverinfo="text", showlegend=False))
     i_air = len(fig.data)
     fig.add_trace(go.Scatter(x=[label_pos[0][0], label_pos[1][0]], y=[label_pos[0][1], label_pos[1][1]],
-                             mode="text", text=air_labels(T_out_frames[keep[0]]),
+                             mode="text", text=air_labels(T_in_frames[keep[0]], T_out_frames[keep[0]]),
                              textposition=[label_pos[0][2], label_pos[1][2]],
                              textfont=dict(size=12, color=ARROW_COLOR), hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(
@@ -138,7 +138,7 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
             T = T_core_frames[k]
             data = [dict(type="scatter", fillcolor=c) for c in colors(T)]
             data.append(dict(type="scatter", text=labels(T), hovertext=hovers(T, times[k])))
-            data.append(dict(type="scatter", text=air_labels(T_out_frames[k])))
+            data.append(dict(type="scatter", text=air_labels(T_in_frames[k], T_out_frames[k])))
             frames.append(go.Frame(name=str(k), data=data, traces=idx_traces))
         fig.frames = frames
         step_args = dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))
@@ -207,20 +207,27 @@ def temperature_figure(res, T_target: float, cv: Callable, ul: Callable, height:
         fig.add_trace(go.Scatter(x=prof.index, y=cv("temp", prof.iloc[:, -1].values),
                                  name=f"{label} (P{pos}) surface node", line=dict(color=color, dash="dash")))
     C = res.cell
-    fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_air_in), name="Air in",
+    fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_air_in), name="Air in (coil supply)",
                              line=dict(color="#5a6b7b", dash="dot")))
-    fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_air_out), name="Air out",
+    fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_air_out), name="Air out (coil return)",
                              line=dict(color="#2b3a4a", dash="dashdot")))
+    if "SST" in C and C.SST.notna().any():
+        fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.SST), name="SST",
+                                 line=dict(color="#2a9d8f", width=1.5)))
     fig.add_hline(y=cv("temp", T_target), line_dash="dot", line_color="#888", annotation_text="Target")
     _finish(fig, ul("temp"), height)
     return fig
 
 
-def power_figure(res, cv: Callable, ul: Callable, height: int = 420) -> go.Figure:
+def power_figure(res, cv: Callable, ul: Callable, height: int = 420,
+                 design_kW: float | None = None) -> go.Figure:
     C = res.cell
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", C.Q_cell_kW), name="Cooling power",
                              line=dict(color="#1f5fbf", width=2.5)))
+    if design_kW is not None:
+        fig.add_hline(y=cv("power", design_kW), line_dash="dot", line_color="#888",
+                      annotation_text="Refrigeration design")
     fan = C["fan_kW"] if "fan_kW" in C else np.zeros(len(C))
     fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", fan), name="Fan power",
                              line=dict(color="#e08a1e", width=2)))

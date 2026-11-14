@@ -11,6 +11,9 @@ identical, so the cell holds one representative Lane with a multiplicity of
 n_lanes. Uneven distribution later just means several Lanes with their own
 flows.
 
+Supply air comes from the coil / refrigeration balance (refrigeration.py),
+re-solved every time step.
+
 Spacers: if the flow runs along the spacer channels, the surface HTC is used
 as given. If it runs across them (vertical flow, or horizontal flow across
 one-way channels), the HTC is reduced by `spacer_htc_reduction`:
@@ -23,6 +26,7 @@ from dataclasses import dataclass
 
 from .config import Scenario
 from .pallet import Pallet, air_density
+from .refrigeration import Balance, Coil, RefSystem, solve_balance
 
 # face -> (axis, axis label)
 FACE_AXIS = {"bottom": "height", "top": "height", "front": "depth", "back": "depth",
@@ -61,7 +65,7 @@ def air_path(s: Scenario) -> AirPath:
         h = a.htc * (1.0 - a.spacer_htc_reduction)
 
     flow_total = a.flow_total
-    m_dot_total = air_density(a.T_in) * flow_total
+    m_dot_total = air_density(s.cooling.T_air_reference) * flow_total
     return AirPath(axis, c.inlet_face, OPPOSITE[c.inlet_face], n_series, n_lanes, alignment, h,
                    flow_total, m_dot_total, m_dot_total / n_lanes)
 
@@ -75,9 +79,22 @@ class Lane:
         self.multiplicity = multiplicity
         self.pallets = [Pallet(s, name=f"P{i + 1}", m_dot=self.m_dot, h=self.h)
                         for i in range(path.n_series)]
-        self.T_in = s.air.T_in
+        self.T_in = s.cooling.T_air_reference
         self.T_out = self.T_in
         self.update_air()
+
+    def linear_return(self) -> tuple[float, float]:
+        """(a, b) with lane outlet T_out = a + b * T_in for the current pallet states.
+
+        Each pallet: Q = G (T_N - T_in), T_out = T_in + Q / C  ->  T_out = alpha T_in + beta.
+        """
+        a, b = 0.0, 1.0
+        C = self.m_dot * self.pallets[0].s.air.cp
+        for p in self.pallets:
+            G, T_N = p.surface_coupling()
+            alpha, beta = 1.0 - G / C, G * T_N / C
+            a, b = alpha * a + beta, alpha * b
+        return a, b
 
     def update_air(self):
         """Propagate inlet air through the lane using the current pallet states (no stepping)."""
@@ -98,12 +115,47 @@ class Lane:
 
 
 class Cell:
+    """Pallet lanes plus the coil/refrigeration loop that sets the supply air.
+
+    Each step: with the pallet states frozen, cell return air is linear in supply
+    air; the coil + refrigeration balance is solved for SST and supply air; then
+    every lane is stepped with that supply air.
+    """
+
     def __init__(self, s: Scenario):
         self.s = s
         self.path = air_path(s)
         self.lanes = [Lane(s, self.path, multiplicity=self.path.n_lanes)]
         self.t = 0.0
-        self.Q = sum(l.multiplicity * sum(p.Q_now for p in l.pallets) for l in self.lanes)
+        c = s.cooling
+        self.fixed = c.fixed_supply_T is not None
+        if not self.fixed:
+            self.coil = Coil(c.coil_Q_design, c.coil_T_supply_design, c.coil_T_return_design, c.coil_SST_design)
+            self.ref = RefSystem(c.ref_Q_design, c.ref_SST_design, c.refrigerant)
+        self.C_air = self.path.m_dot_total * s.air.cp
+        self.balance = self._solve_supply()
+        for l in self.lanes:
+            l.T_in = self.balance.T_supply
+            l.update_air()
+        self.Q = self.balance.Q
+
+    def _linear_return(self) -> tuple[float, float]:
+        """Mixed cell return air T_r = a + b * T_supply."""
+        w = sum(l.multiplicity * l.m_dot for l in self.lanes)
+        a = b = 0.0
+        for l in self.lanes:
+            la, lb = l.linear_return()
+            a += l.multiplicity * l.m_dot * la / w
+            b += l.multiplicity * l.m_dot * lb / w
+        return a, b
+
+    def _solve_supply(self) -> Balance:
+        a, b = self._linear_return()
+        if self.fixed:
+            Ts = self.s.cooling.fixed_supply_T
+            Tr = a + b * Ts
+            return Balance(float("nan"), Ts, Tr, self.C_air * (Tr - Ts), "fixed supply")
+        return solve_balance(a, b, self.C_air, self.coil, self.ref)
 
     @property
     def pallets(self):
@@ -114,9 +166,16 @@ class Cell:
         return min(p.dt_stable for p in self.pallets)
 
     def step(self, dt: float) -> float:
+        self.balance = self._solve_supply()
+        for l in self.lanes:
+            l.T_in = self.balance.T_supply
         self.Q = sum(l.multiplicity * l.step(dt) for l in self.lanes)
         self.t += dt
         return self.Q
+
+    @property
+    def T_supply(self) -> float:
+        return self.balance.T_supply
 
     @property
     def T_air_out(self) -> float:
