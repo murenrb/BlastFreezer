@@ -10,7 +10,7 @@ import pandas as pd
 from .cell import Cell
 from .config import Scenario
 
-CELL_COLUMNS = ["time_h", "T_air_in", "T_air_out", "Q_cell_kW", "Q_coil_kW", "fan_kW", "SST", "T_coil_out",
+CELL_COLUMNS = ["time_h", "T_supply", "T_return", "Q_cell_kW", "Q_coil_kW", "fan_kW", "SST", "T_coil_out",
                 "limit", "n_frozen_positions"]
 PALLET_COLUMNS = ["time_h", "position", "T_core", "T_surface", "T_mean", "T_air_in", "T_air_out",
                   "Q_kW", "frozen_fraction", "front_depth_mm"]
@@ -41,7 +41,7 @@ def simulate(s: Scenario) -> Result:
         th = cell.t / 3600.0
         times.append(th)
         n_frozen = sum(p.t_frozen is not None for p in lane.pallets)
-        bal = cell.balance        # balance used for the step just taken (T_air_in = coil supply air)
+        bal = cell.balance        # balance used for the step just taken (T_supply = coil supply air)
         cell_rows.append((th, bal.T_supply, cell.T_air_out, cell.Q / 1000.0, bal.Q / 1000.0,
                           bal.Q_fan / 1000.0, bal.SST, bal.T_coil_out, bal.limited, n_frozen))
         for i, p in enumerate(lane.pallets):

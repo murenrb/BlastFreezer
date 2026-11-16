@@ -24,10 +24,10 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 
 - Upper left: inputs in tabs (Pallet, Cell, Model, Boost) and **Run solver**.
 - Upper right: the cell (front view), one square per pallet position, coloured by core temperature
-  from the load-in temperature (red) to the target (blue), with the inlet/outlet air arrows
+  from the load-in temperature (red) to the target (blue), with the supply/return air arrows
   (left/right or bottom/top). The time slider and play button run in the browser, so the cell
   updates while dragging.
-- Bottom: Temperature (warmest and coldest pallet core and surface node, air in and out) and
+- Bottom: Temperature (warmest and coldest pallet core and surface node, supply and return air) and
   Power (cooling, fan) time series.
 
 ## Model

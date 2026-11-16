@@ -400,8 +400,9 @@ with left:
             st.error(str(e))
 
 res = ss.get("res")
-if res is not None and Scenario.from_dict(ss["res_scn"]).cell.inlet_face not in GUI_FACES:
-    res = None                                    # solution from an older layout option
+if res is not None and (Scenario.from_dict(ss["res_scn"]).cell.inlet_face not in GUI_FACES
+                        or "T_supply" not in res.cell):
+    res = None                                    # solution from an older app version
 shown = Scenario.from_dict(ss["res_scn"]) if res is not None else scenario
 stale = res is not None and ss["res_scn"] != scenario.to_dict()
 
@@ -413,20 +414,20 @@ with right:
     flow_text = f"{cv('flow', shown.cooling.airflow):,.{1 if units() == U.SI else 0}f} {ul('flow')}"
     if res is None:
         n_ser = {"bottom": c.n_high, "top": c.n_high, "left": c.n_wide, "right": c.n_wide}[c.inlet_face]
-        T_frames, times, T_in, T_out = [[shown.sim.T_start] * n_ser], [0.0], [None], [None]
+        T_frames, times, T_sup, T_ret = [[shown.sim.T_start] * n_ser], [0.0], [None], [None]
         try:                                  # load-in balance as a preview
             c0 = Cell(shown)
-            T_in, T_out = [c0.balance.T_supply], [c0.balance.T_return]
+            T_sup, T_ret = [c0.balance.T_supply], [c0.balance.T_return]
         except ValueError:
             pass
     else:
         P = res.pallets.pivot(index="time_h", columns="position", values="T_core").sort_index()
         T_frames, times = P.values, list(P.index)
         Cw = res.cell.set_index("time_h").loc[P.index]
-        T_in, T_out = Cw["T_air_in"].tolist(), Cw["T_air_out"].tolist()
+        T_sup, T_ret = Cw["T_supply"].tolist(), Cw["T_return"].tolist()
     st.plotly_chart(
-        cell_figure(c.n_deep, c.n_wide, c.n_high, c.inlet_face, T_frames, times, T_out,
-                    shown.sim.T_start, shown.sim.T_target, cv, ul, T_in, flow_text, height=480),
+        cell_figure(c.n_deep, c.n_wide, c.n_high, c.inlet_face, T_frames, times, T_ret,
+                    shown.sim.T_start, shown.sim.T_target, cv, ul, T_sup, flow_text, height=480),
         width="stretch", config={"displayModeBar": False}, key="cell_fig")
     if res is None:
         st.caption("Run the solver, then drag the time slider (or press ▶) to step through the blast.")
@@ -485,7 +486,7 @@ else:
                 ("Coil effectiveness at cell airflow", f"{info['coil_eps']:.3f}"),
                 ("Compressor displacement", f"{cv('flow', info['ref_displacement_m3s']):,.3f} {ul('flow')}"),
                 ("SST range over the blast", f"{cv('temp', C.SST.max()):.1f} → {cv('temp', C.SST.min()):.1f} {ul('temp')}"),
-                ("Supply air range", f"{cv('temp', C.T_air_in.max()):.1f} → {cv('temp', C.T_air_in.min()):.1f} {ul('temp')}"),
+                ("Supply air range", f"{cv('temp', C.T_supply.max()):.1f} → {cv('temp', C.T_supply.min()):.1f} {ul('temp')}"),
                 ("Steps at SST limit", f"{(C.limit != '').sum()} of {len(C)} recorded"),
             ], columns=["Cooling", "Value"]), hide_index=True, width="stretch")
         ft = pd.DataFrame({"Series position": [f"P{i + 1}" for i in range(len(res.freeze_times_h))],

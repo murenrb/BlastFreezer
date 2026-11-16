@@ -92,7 +92,7 @@ def test_return_setpoint_holds_return_air():
 def test_default_run_respects_controls():
     s = Scenario()
     C = simulate(s).cell
-    assert C.T_air_out.min() >= s.cooling.T_return_setpoint - 1e-6
+    assert C.T_return.min() >= s.cooling.T_return_setpoint - 1e-6
     assert C.SST.max() <= s.cooling.SST_max + 1e-6
     assert (C.limit == "return setpoint").any()
 
