@@ -15,6 +15,9 @@ from plotly.colors import sample_colorscale
 # red (load-in temperature) -> purple -> blue (target core temperature)
 COLORSCALE = [[0.0, "#1f5fbf"], [0.5, "#8b4fd6"], [1.0, "#d7263d"]]
 ARROW_COLOR = "#2b3a4a"
+ACCENT = "#6633ff"                    # Rebound logo purple (matches the Streamlit theme)
+ACCENT_LIGHT = "rgba(102, 51, 255, 0.15)"
+ACCENT_EDGE = "rgba(102, 51, 255, 0.45)"
 
 FACE = {  # face -> (axis, index of the face's end: 0 = low side, 1 = high side)
     "front": ("depth", 0), "back": ("depth", 1), "left": ("width", 0),
@@ -144,11 +147,13 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
         step_args = dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))
         fig.update_layout(
             sliders=[dict(active=0, x=0.12, len=0.86, y=0, yanchor="top", pad=dict(t=10, b=0),
+                          bgcolor=ACCENT_LIGHT, activebgcolor=ACCENT, bordercolor=ACCENT_EDGE,
                           currentvalue=dict(prefix="Model time: ", suffix=" h", font=dict(size=13)),
                           steps=[dict(method="animate", label=f"{times[k]:.1f}", args=[[str(k)], step_args])
                                  for k in keep])],
             updatemenus=[dict(type="buttons", direction="left", x=0.0, y=0, xanchor="left", yanchor="top",
-                              pad=dict(t=22), showactive=False, buttons=[
+                              pad=dict(t=22), showactive=False, bgcolor=ACCENT_LIGHT,
+                              bordercolor=ACCENT_EDGE, font=dict(color=ACCENT), buttons=[
                                   dict(label="▶", method="animate",
                                        args=[None, dict(frame=dict(duration=80, redraw=True),
                                                         fromcurrent=True, transition=dict(duration=0))]),
@@ -192,7 +197,7 @@ def extreme_positions(freeze_times_h: Sequence, final_T_core: Sequence[float]) -
     return order[0] + 1, order[-1] + 1
 
 
-def temperature_figure(res, T_target: float, cv: Callable, ul: Callable, height: int = 420) -> go.Figure:
+def temperature_figure(res, cv: Callable, ul: Callable, height: int = 420) -> go.Figure:
     P = res.pallets
     final = P[P.time_h == P.time_h.max()].sort_values("position").T_core.tolist()
     cold, warm = extreme_positions(res.freeze_times_h, final)
@@ -214,7 +219,6 @@ def temperature_figure(res, T_target: float, cv: Callable, ul: Callable, height:
     if "SST" in C and C.SST.notna().any():
         fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.SST), name="SST",
                                  line=dict(color="#2a9d8f", width=1.5)))
-    fig.add_hline(y=cv("temp", T_target), line_dash="dot", line_color="#888", annotation_text="Target")
     _finish(fig, ul("temp"), height)
     return fig
 

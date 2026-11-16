@@ -15,10 +15,12 @@ keeps the values.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+
 import streamlit as st
 
 from blastfreezer import (PACKAGING_PRESETS, Air, CellSpec, Packaging, PalletLoad,
@@ -34,7 +36,7 @@ from blastfreezer.viz import GUI_FACES, cell_figure, power_figure, temperature_f
 FLOW_LABEL = {"left": "Left → right", "right": "Right → left", "bottom": "Bottom → top",
               "top": "Top → bottom"}
 
-st.set_page_config(page_title="Blast Freezer Model", layout="wide")
+st.set_page_config(page_title="Blast Freezing Simulator", layout="wide")
 D = Scenario()
 ss = st.session_state
 
@@ -362,6 +364,12 @@ def model_tab() -> tuple[SimSettings, float, float]:
 
 
 # ---------------------------------------------------------------- layout ----
+LOGO = Path(__file__).parent / "resources" / "rebound_logo_2C_A big.png"
+h_title, h_logo = st.columns([4, 1], vertical_alignment="center")
+h_title.title("Blast Freezing Simulator")
+if LOGO.exists():
+    h_logo.image(str(LOGO), width="stretch")
+
 left, right = st.columns([5, 6], gap="large")
 
 with left:
@@ -441,7 +449,7 @@ if res is None:
         t.info("Run the solver to see the time series.")
 else:
     with t_temp:
-        st.plotly_chart(temperature_figure(res, shown.sim.T_target, cv, ul), width="stretch")
+        st.plotly_chart(temperature_figure(res, cv, ul), width="stretch")
         st.caption("Warmest / coldest = last / first pallet to reach the target. "
                    "Surface node = outermost finite volume.")
     with t_pow:
