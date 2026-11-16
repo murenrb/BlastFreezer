@@ -173,8 +173,12 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
                            arrowcolor=color, text="")
 
     (x_lo, x_hi), (y_lo, y_hi) = L["range"]
-    fig.update_xaxes(visible=False, range=[x_lo, x_hi], fixedrange=True)
-    fig.update_yaxes(visible=False, range=[y_lo, y_hi], scaleanchor="x", scaleratio=1, fixedrange=True)
+    # constrain="domain": keep 1:1 by shrinking the plot area, never by widening the ranges.
+    # (The default widens the ranges and Plotly writes them back into the figure, so each
+    # browser resize compounds and the drawing ratchets smaller.)
+    fig.update_xaxes(visible=False, range=[x_lo, x_hi], fixedrange=True, autorange=False, constrain="domain")
+    fig.update_yaxes(visible=False, range=[y_lo, y_hi], scaleanchor="x", scaleratio=1, fixedrange=True,
+                     autorange=False, constrain="domain")
     fig.update_layout(height=height, margin=dict(l=0, r=0, t=10, b=10),
                       plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", hovermode="closest")
 
