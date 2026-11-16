@@ -22,7 +22,12 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 
 ## GUI
 
-- Upper left: inputs in tabs (Pallet, Cell, Model, Boost) and **Run solver**.
+- Upper left: inputs in tabs (Pallet, Cell, Cooling, Model, Boost) and **Run solver**. Detailed
+  inputs sit in collapsible sections: Product details (properties, bound water), Packaging details
+  (package height, spacers, packaging walls), and on the Cooling tab Coil, Refrigeration system and
+  Controls.
+- Package height is picked from the pallet height divided into 1 to 20 whole layers. With spacers on,
+  there is one spacer between every pair of layers (layers − 1), so the count is calculated.
 - Upper right: the cell (front view), one square per pallet position, coloured by core temperature
   from the load-in temperature (red) to the target (blue). The air loop runs from the main coil
   (above left, showing its SST) through the supply leg into the cell and back through the return

@@ -116,12 +116,22 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
 
     fig = go.Figure()
     # air loop: main (cell <-> main coil) and the boost branch, lines under everything else
+    # Lines stop inside the base of their arrowhead; heads are triangles in drawing units, so
+    # they scale with the drawing and the line can never poke out past the tip.
     boost_color = ARROW_COLOR if boost_on else LOOP_OFF
+    head_len, head_half = 0.4 * u, 0.2 * u
     for path, color in [(L["boost_in"], boost_color), (L["boost_out"], boost_color),
                         (L["supply"], ARROW_COLOR), (L["return"], ARROW_COLOR)]:
-        xs, ys = zip(*path)
+        xs, ys = zip(*_trim(path, 0.75 * head_len))
         fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color=color, width=4),
                                  hoverinfo="skip", showlegend=False))
+    for (tx, ty), (dx, dy), color in [(t, d, ARROW_COLOR) for t, d in L["heads"]] + \
+                                     [(t, d, boost_color) for t, d in L["boost_heads"]]:
+        bx_, by_ = tx - head_len * dx, ty - head_len * dy
+        fig.add_trace(go.Scatter(x=[tx, bx_ - head_half * dy, bx_ + head_half * dy, tx],
+                                 y=[ty, by_ + head_half * dx, by_ - head_half * dx, ty],
+                                 mode="lines", fill="toself", fillcolor=color, line=dict(color=color, width=1),
+                                 hoverinfo="skip", showlegend=False, name="arrowhead"))
     T0 = T_core_frames[keep[0]]
     for (x0, y0, d, s, idx), c in zip(pallets, colors(T0)):
         fig.add_trace(go.Scatter(
@@ -163,14 +173,6 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
         if name == "Boost Coil" and not boost_on:
             fig.add_annotation(x=x - w / 2 + 0.08 * u, y=y + h / 2 - 0.08 * u, xanchor="left", yanchor="top",
                                align="left", text="SST:<br>—", showarrow=False, font=dict(size=11, color=ink))
-
-    # arrowheads (tip, unit direction)
-    heads = [(t, d, ARROW_COLOR) for t, d in L["heads"]] + \
-            [(t, d, ARROW_COLOR if boost_on else LOOP_OFF) for t, d in L["boost_heads"]]
-    for (x1, y1), (dx, dy), color in heads:
-        fig.add_annotation(x=x1, y=y1, ax=x1 - 0.3 * u * dx, ay=y1 - 0.3 * u * dy, xref="x", yref="y",
-                           axref="x", ayref="y", showarrow=True, arrowhead=2, arrowsize=1.0, arrowwidth=4,
-                           arrowcolor=color, text="")
 
     (x_lo, x_hi), (y_lo, y_hi) = L["range"]
     # constrain="domain": keep 1:1 by shrinking the plot area, never by widening the ranges.

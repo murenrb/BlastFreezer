@@ -92,52 +92,92 @@ def islider(label: str, qid: str, default: int, lo: int, hi: int, **kw) -> int:
 
 
 # ---------------------------------------------------------------- inputs ----
+MAX_LAYERS = 20
+
+
 def pallet_tab() -> tuple[Product, Packaging, PalletLoad, float, float]:
     c1, c2 = st.columns(2, gap="medium")
+    l = D.load
+    # Pallet column first: package height and spacers in the packaging details depend on its height.
+    with c2:
+        st.markdown("**Pallet**")
+        mass = qw("slider", "Product mass", "mass", "mass", l.mass, 100, 1200, step=5 if units() == U.SI else 10)
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            length = qw("number", "Depth", "length", "length", l.length, 0.2, 3)
+        with d2:
+            width = qw("number", "Width", "width", "length", l.width, 0.2, 3)
+        with d3:
+            height = qw("number", "Height", "height", "length", l.height, 0.1, 4,
+                        help="Product height, excluding spacers.")
+        use_sp = st.toggle("Blast spacers between layers", l.use_spacers, key="w::use_sp",
+                           help="A spacer between every layer of packages. Count and thickness are in "
+                                "Packaging details.")
+        summary = st.empty()
+
+        st.markdown("**Temperatures**")
+        T0 = qw("slider", "Load-in temperature", "T0", "temp", D.sim.T_start, -5, 40)
+        Tt = qw("slider", "Target core temperature", "Ttgt", "temp", D.sim.T_target, -40, -5)
+
     with c1:
         st.markdown("**Product**")
         names = list(FOODS) + [CUSTOM]
         choice = st.selectbox("Product", names, index=names.index(DEFAULT_FOOD), key="w::product",
                               label_visibility="collapsed")
-        if choice != CUSTOM:
-            ss["custom_base"] = choice
-            props = product_kwargs(choice)
-            food = FOODS[choice]
-            rows = [("Water content", f"{props['water_fraction']:.1%}"),
-                    (f"cp unfrozen [{ul('cp')}]", f"{cv('cp', props['cp_unfrozen']):.3g}"),
-                    (f"cp frozen [{ul('cp')}]", f"{cv('cp', props['cp_frozen']):.3g}"),
-                    (f"k unfrozen [{ul('k')}]", f"{cv('k', props['k_unfrozen']):.3f}"),
-                    (f"k frozen [{ul('k')}]", f"{cv('k', props['k_frozen']):.3f}"),
-                    (f"Density [{ul('density')}]", f"{cv('density', props['density']):.0f}"),
-                    (f"Initial freezing point [{ul('temp')}]", f"{cv('temp', props['T_freeze']):.1f}")]
-            st.dataframe(pd.DataFrame(rows, columns=["Property", "Value"]), hide_index=True,
-                         width="stretch", height=document_height(len(rows)))
-            st.caption(f"Source: {food.source}" + ("  ⚠️ estimated" if food.estimated else ""))
-        else:
-            base = ss.get("custom_base", DEFAULT_FOOD)
-            b = product_kwargs(base)
-            st.caption(f"Starting from {base}")
-            k = f"cust_{base}_"
-            props = dict(
-                name=f"Custom ({base})",
-                water_fraction=qw("number", "Water content", k + "xw", None, b["water_fraction"], 0, 1,
-                                  si_scale=100, unit_label="%", step=0.5, format="%.1f"),
-                cp_unfrozen=qw("number", "cp unfrozen", k + "cpu", "cp", b["cp_unfrozen"], 500, 5000),
-                cp_frozen=qw("number", "cp frozen", k + "cpf", "cp", b["cp_frozen"], 500, 5000),
-                k_unfrozen=qw("number", "k unfrozen", k + "ku", "k", b["k_unfrozen"], 0.05, 3),
-                k_frozen=qw("number", "k frozen", k + "kf", "k", b["k_frozen"], 0.05, 3),
-                density=qw("number", "Density (solid)", k + "rho", "density", b["density"], 300, 2000),
-                T_freeze=qw("number", "Initial freezing point", k + "Tf", "temp", b["T_freeze"], -10, 0),
-            )
-        bound = qw("slider", "Bound (unfreezable) water", "xb", None, D.product.bound_water_fraction, 0, 0.3,
-                   si_scale=100, unit_label="% of water", step=1.0, format="%.0f")
+        with st.expander("Product details", expanded=choice == CUSTOM):
+            if choice != CUSTOM:
+                ss["custom_base"] = choice
+                props = product_kwargs(choice)
+                food = FOODS[choice]
+                rows = [("Water content", f"{props['water_fraction']:.1%}"),
+                        (f"cp unfrozen [{ul('cp')}]", f"{cv('cp', props['cp_unfrozen']):.3g}"),
+                        (f"cp frozen [{ul('cp')}]", f"{cv('cp', props['cp_frozen']):.3g}"),
+                        (f"k unfrozen [{ul('k')}]", f"{cv('k', props['k_unfrozen']):.3f}"),
+                        (f"k frozen [{ul('k')}]", f"{cv('k', props['k_frozen']):.3f}"),
+                        (f"Density [{ul('density')}]", f"{cv('density', props['density']):.0f}"),
+                        (f"Initial freezing point [{ul('temp')}]", f"{cv('temp', props['T_freeze']):.1f}")]
+                st.dataframe(pd.DataFrame(rows, columns=["Property", "Value"]), hide_index=True,
+                             width="stretch", height=document_height(len(rows)))
+                st.caption(f"Source: {food.source}" + ("  ⚠️ estimated" if food.estimated else ""))
+            else:
+                base = ss.get("custom_base", DEFAULT_FOOD)
+                b = product_kwargs(base)
+                st.caption(f"Starting from {base}")
+                k = f"cust_{base}_"
+                props = dict(
+                    name=f"Custom ({base})",
+                    water_fraction=qw("number", "Water content", k + "xw", None, b["water_fraction"], 0, 1,
+                                      si_scale=100, unit_label="%", step=0.5, format="%.1f"),
+                    cp_unfrozen=qw("number", "cp unfrozen", k + "cpu", "cp", b["cp_unfrozen"], 500, 5000),
+                    cp_frozen=qw("number", "cp frozen", k + "cpf", "cp", b["cp_frozen"], 500, 5000),
+                    k_unfrozen=qw("number", "k unfrozen", k + "ku", "k", b["k_unfrozen"], 0.05, 3),
+                    k_frozen=qw("number", "k frozen", k + "kf", "k", b["k_frozen"], 0.05, 3),
+                    density=qw("number", "Density (solid)", k + "rho", "density", b["density"], 300, 2000),
+                    T_freeze=qw("number", "Initial freezing point", k + "Tf", "temp", b["T_freeze"], -10, 0),
+                )
+            bound = qw("slider", "Bound (unfreezable) water", "xb", None, D.product.bound_water_fraction, 0, 0.3,
+                       si_scale=100, unit_label="% of water", step=1.0, format="%.0f")
         product = Product(bound_water_fraction=bound, **props)
 
         st.markdown("**Packaging**")
         kind = st.selectbox("Packaging", list(PACKAGING_PRESETS), key="w::pkg", label_visibility="collapsed")
         pre = PACKAGING_PRESETS[kind]
-        pkg_h = qw("number", "Package height", "pkg_h", "length", D.packaging.package_height, 0.02, 2.0)
         with st.expander("Packaging details"):
+            n_layers = st.select_slider(
+                f"Package height [{ul('length')}]", options=list(range(MAX_LAYERS, 0, -1)),
+                value=ss.setdefault("n_layers", int(round(l.height / D.packaging.package_height))),
+                key=f"w::n_layers::{units()}",       # per unit system, like qw(); value kept in ss
+                # labels must be unique: the widget maps its value back to an option by label
+                format_func=lambda n: f"{cv('length', height / n):.2f} ({n} layer{'s' * (n > 1)})",
+                help=f"Pallet height divided into a whole number of layers (1 to {MAX_LAYERS}).")
+            ss["n_layers"] = n_layers
+            pkg_h = height / n_layers
+            n_sp = n_layers - 1
+            st.number_input("Spacer layers", value=n_sp, disabled=True,
+                            help="Calculated: one spacer between every pair of package layers "
+                                 "(layers − 1). Spacers are never skipped on a row.")
+            t_sp = qw("number", "Spacer thickness", "t_sp", "small", l.spacer_thickness, 0.005, 0.2,
+                      si_scale=1000, disabled=not use_sp)
             wall = qw("number", "Wall thickness", f"wt_{kind}", "small", pre["wall_thickness"], 0, 0.02,
                       si_scale=1000)
             k_wall = qw("number", "Wall conductivity", f"kw_{kind}", "k", pre["k_wall"], 0.001, 1)
@@ -149,31 +189,13 @@ def pallet_tab() -> tuple[Product, Packaging, PalletLoad, float, float]:
         pkg = Packaging(kind, pkg_h, wall, k_wall, rho_wall, pre["cp_wall"], gap, D.packaging.k_air,
                         pre["surface_wall"])
 
-    with c2:
-        st.markdown("**Pallet**")
-        l = D.load
-        mass = qw("slider", "Product mass", "mass", "mass", l.mass, 100, 1200, step=5 if units() == U.SI else 10)
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            length = qw("number", "Depth", "length", "length", l.length, 0.2, 3)
-        with d2:
-            width = qw("number", "Width", "width", "length", l.width, 0.2, 3)
-        with d3:
-            height = qw("number", "Height", "height", "length", l.height, 0.1, 4,
-                        help="Product height, excluding spacers.")
-        use_sp = st.toggle("Blast spacers between layers", l.use_spacers, key="w::use_sp")
-        n_sp = islider("Spacer layers", "n_sp", l.n_spacers, 1, 15, disabled=not use_sp)
-        t_sp = qw("number", "Spacer thickness", "t_sp", "small", l.spacer_thickness, 0.005, 0.2,
-                  si_scale=1000, disabled=not use_sp)
-        load = PalletLoad(mass, length, width, height, use_sp, n_sp, t_sp, "both",
-                          ss.get("w::geom", "auto"))
-        if use_sp:
-            st.caption(f"{n_sp + 1} layers of {cv('length', height / (n_sp + 1)):.2f} {ul('length')}; "
-                       f"stack height {cv('length', load.stack_height):.2f} {ul('length')}")
-
-        st.markdown("**Temperatures**")
-        T0 = qw("slider", "Load-in temperature", "T0", "temp", D.sim.T_start, -5, 40)
-        Tt = qw("slider", "Target core temperature", "Ttgt", "temp", D.sim.T_target, -40, -5)
+    load = PalletLoad(mass, length, width, height, use_sp, n_sp, t_sp, "both", ss.get("w::geom", "auto"))
+    layers = f"{n_layers} layer{'s' * (n_layers > 1)} of {cv('length', pkg_h):.2f} {ul('length')}"
+    if use_sp and n_sp > 0:
+        summary.caption(f"{layers}, {n_sp} spacer{'s' * (n_sp > 1)} of {cv('small', t_sp * 1000):.{1 if units() == U.SI else 2}f} "
+                        f"{ul('small')}; stack height {cv('length', load.stack_height):.2f} {ul('length')}")
+    else:
+        summary.caption(layers + (" (single layer, so no spacers)" if use_sp else ", no spacers"))
     return product, pkg, load, T0, Tt
 
 
@@ -272,49 +294,56 @@ HELP = {
 
 def cooling_tab() -> Cooling:
     c = D.cooling
-    c1, c2 = st.columns(2, gap="medium")
-    with c1:
-        st.markdown("**Coil (design point)**")
-        coil_Q = qw("number", "Design cooling power", "coil_Q", "power", c.coil_Q_design, 1_000, 2_000_000,
-                    si_scale=1e-3, help=HELP["coil_Q"])
-        coil_Ts = qw("number", "Design supply air temp", "coil_Ts", "temp", c.coil_T_supply_design, -60, 0,
-                     help=HELP["coil_Ts"])
-        coil_SST = qw("number", "Design SST", "coil_SST", "temp", c.coil_SST_design, -70, 0,
-                      help=HELP["coil_SST"])
-        driver = st.segmented_control("Set by", ["Return air", "Airflow"], default="Return air",
-                                      key="w::coil_driver", help=HELP["driver"])
-        driver = driver or "Return air"
-        if driver == "Return air":
-            Tr = qw("number", "Design return air temp", "coil_Tr", "temp", c.coil_T_return_design, -60, 10,
-                    help=HELP["coil_Tr"])
-            if Tr <= coil_Ts:
-                st.error("Return air must be warmer than supply air.")
-                Tr = coil_Ts + 0.1
-            airflow = coil_airflow(coil_Q, coil_Ts, Tr)
-            ss["si::coil_flow"] = airflow
-            _forget_widget("coil_flow")
-            _readonly("Airflow", "flow", airflow, HELP["calc_flow"] + " " + HELP["coil_flow"])
-        else:
-            airflow = qw("number", "Airflow", "coil_flow", "flow", c.airflow, 0.5, 200, help=HELP["coil_flow"])
-            Tr = coil_return(coil_Q, coil_Ts, airflow)
-            ss["si::coil_Tr"] = Tr
-            _forget_widget("coil_Tr")
-            _readonly("Design return air temp", "temp", Tr, HELP["calc_Tr"] + " " + HELP["coil_Tr"])
-        fan_spec = qw("number", "Fan power", "fan_spec", "fanspec", c.fan_specific_power, 0, 10_000, si_scale=1e-3,
-                      help=HELP["fan_spec"])
-        st.caption(f"Fans: {cv('power', fan_spec * airflow / 1000):,.1f} {ul('power')} of heat "
-                   f"({fan_spec * airflow / 745.7:,.0f} hp)")
-    with c2:
-        st.markdown("**Refrigeration system (design point)**")
-        ref_Q = qw("number", "Design refrigeration power", "ref_Q", "power", c.ref_Q_design, 1_000, 2_000_000,
-                   si_scale=1e-3, help=HELP["ref_Q"])
-        ref_SST = qw("number", "Design SST", "ref_SST", "temp", c.ref_SST_design, -70, 0, help=HELP["ref_SST"])
-        refr = st.selectbox("Refrigerant", REFRIGERANT_CHOICES, index=REFRIGERANT_CHOICES.index(c.refrigerant),
-                            key="w::refrigerant", help=HELP["refrigerant"])
-        st.markdown("**Controls**")
-        SST_max = qw("number", "Max SST", "SST_max", "temp", c.SST_max, -70, 10, help=HELP["SST_max"])
-        T_set = qw("number", "Return air setpoint", "T_set", "temp", c.T_return_setpoint, -70, 0,
-                   help=HELP["T_set"])
+    with st.expander("Coil (design point)"):
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            coil_Q = qw("number", "Design cooling power", "coil_Q", "power", c.coil_Q_design, 1_000, 2_000_000,
+                        si_scale=1e-3, help=HELP["coil_Q"])
+            coil_Ts = qw("number", "Design supply air temp", "coil_Ts", "temp", c.coil_T_supply_design, -60, 0,
+                         help=HELP["coil_Ts"])
+            coil_SST = qw("number", "Design SST", "coil_SST", "temp", c.coil_SST_design, -70, 0,
+                          help=HELP["coil_SST"])
+        with c2:
+            driver = st.segmented_control("Set by", ["Return air", "Airflow"], default="Return air",
+                                          key="w::coil_driver", help=HELP["driver"])
+            driver = driver or "Return air"
+            if driver == "Return air":
+                Tr = qw("number", "Design return air temp", "coil_Tr", "temp", c.coil_T_return_design, -60, 10,
+                        help=HELP["coil_Tr"])
+                if Tr <= coil_Ts:
+                    st.error("Return air must be warmer than supply air.")
+                    Tr = coil_Ts + 0.1
+                airflow = coil_airflow(coil_Q, coil_Ts, Tr)
+                ss["si::coil_flow"] = airflow
+                _forget_widget("coil_flow")
+                _readonly("Airflow", "flow", airflow, HELP["calc_flow"] + " " + HELP["coil_flow"])
+            else:
+                airflow = qw("number", "Airflow", "coil_flow", "flow", c.airflow, 0.5, 200, help=HELP["coil_flow"])
+                Tr = coil_return(coil_Q, coil_Ts, airflow)
+                ss["si::coil_Tr"] = Tr
+                _forget_widget("coil_Tr")
+                _readonly("Design return air temp", "temp", Tr, HELP["calc_Tr"] + " " + HELP["coil_Tr"])
+            fan_spec = qw("number", "Fan power", "fan_spec", "fanspec", c.fan_specific_power, 0, 10_000,
+                          si_scale=1e-3, help=HELP["fan_spec"])
+            st.caption(f"Fans: {cv('power', fan_spec * airflow / 1000):,.1f} {ul('power')} of heat "
+                       f"({fan_spec * airflow / 745.7:,.0f} hp)")
+    with st.expander("Refrigeration system (design point)"):
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            ref_Q = qw("number", "Design refrigeration power", "ref_Q", "power", c.ref_Q_design, 1_000,
+                       2_000_000, si_scale=1e-3, help=HELP["ref_Q"])
+            ref_SST = qw("number", "Design SST", "ref_SST", "temp", c.ref_SST_design, -70, 0, help=HELP["ref_SST"])
+        with c2:
+            refr = st.selectbox("Refrigerant", REFRIGERANT_CHOICES,
+                                index=REFRIGERANT_CHOICES.index(c.refrigerant), key="w::refrigerant",
+                                help=HELP["refrigerant"])
+    with st.expander("Controls"):
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            SST_max = qw("number", "Max SST", "SST_max", "temp", c.SST_max, -70, 10, help=HELP["SST_max"])
+        with c2:
+            T_set = qw("number", "Return air setpoint", "T_set", "temp", c.T_return_setpoint, -70, 0,
+                       help=HELP["T_set"])
     cooling = Cooling(coil_Q_design=coil_Q, coil_T_supply_design=coil_Ts, coil_SST_design=coil_SST,
                       airflow=airflow, fan_specific_power=fan_spec, ref_Q_design=ref_Q, ref_SST_design=ref_SST,
                       refrigerant=refr, SST_max=SST_max, T_return_setpoint=T_set)
@@ -389,8 +418,6 @@ with left:
     air = Air(htc, reduction, D.air.cp)
     scenario = Scenario(product, pkg, load, air, cell, sim, cooling)
 
-    if load.use_spacers and pkg.package_height > load.height / (load.n_spacers + 1) * 1.001:
-        st.warning("Package height is taller than the layer between spacers.")
     if st.button("Run solver", type="primary", width="stretch"):
         try:
             with st.spinner("Solving…"):

@@ -70,14 +70,18 @@ N_SERIES = {"bottom": 4, "top": 4, "left": 3, "right": 3}
 @pytest.mark.parametrize("face", GUI_FACES)
 def test_cell_figure_draws_every_pallet(face):
     fig = cell_figure(2, 3, 4, face, [list(range(N_SERIES[face]))], [0.0], [None], 11, -17, cv, ul, [None])
-    fills = [t for t in fig.data if t.fill == "toself"]
+    heads = [t for t in fig.data if t.name == "arrowhead"]
+    fills = [t for t in fig.data if t.fill == "toself" and t.name != "arrowhead"]
     assert len(fills) == 2 * 3 * 4
-    heads = [a for a in fig.layout.annotations if a.showarrow]
     assert len(heads) == 5                         # supply in, return out, into coil, 2 on the boost branch
-    supply = heads[0]                              # first head points into the inlet face
-    into = {"left": supply.x > supply.ax, "right": supply.x < supply.ax,
-            "bottom": supply.y > supply.ay, "top": supply.y < supply.ay}
+    tip, base = (heads[0].x[0], heads[0].y[0]), ((heads[0].x[1] + heads[0].x[2]) / 2, (heads[0].y[1] + heads[0].y[2]) / 2)
+    into = {"left": tip[0] > base[0], "right": tip[0] < base[0],      # first head points into the inlet face
+            "bottom": tip[1] > base[1], "top": tip[1] < base[1]}
     assert into[face]
+    lines = [t for t in fig.data if t.mode == "lines" and t.fill is None]
+    supply_line = lines[2]                         # boost in, boost out, supply, return
+    end = (supply_line.x[-1], supply_line.y[-1])   # line stops inside the head, short of the tip
+    assert min(abs(end[0] - tip[0]), abs(end[1] - tip[1])) < 1e-9 < max(abs(end[0] - tip[0]), abs(end[1] - tip[1]))
     names = {a.text for a in fig.layout.annotations}
     assert {"Main Coil", "Boost Coil"} <= names
     assert not fig.frames and not fig.layout.sliders
