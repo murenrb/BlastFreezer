@@ -72,7 +72,14 @@ def test_cell_figure_draws_every_pallet(face):
     fig = cell_figure(2, 3, 4, face, [list(range(N_SERIES[face]))], [0.0], [None], 11, -17, cv, ul, [None])
     fills = [t for t in fig.data if t.fill == "toself"]
     assert len(fills) == 2 * 3 * 4
-    assert len([a for a in fig.layout.annotations if a.showarrow]) == 2
+    heads = [a for a in fig.layout.annotations if a.showarrow]
+    assert len(heads) == 5                         # supply in, return out, into coil, 2 on the boost branch
+    supply = heads[0]                              # first head points into the inlet face
+    into = {"left": supply.x > supply.ax, "right": supply.x < supply.ax,
+            "bottom": supply.y > supply.ay, "top": supply.y < supply.ay}
+    assert into[face]
+    names = {a.text for a in fig.layout.annotations}
+    assert {"Main Coil", "Boost Coil"} <= names
     assert not fig.frames and not fig.layout.sliders
 
 
@@ -86,6 +93,7 @@ def test_cell_figure_animation_frames():
     assert len(fig.layout.sliders[0].steps) == len(fig.frames)
     first, last = fig.frames[0], fig.frames[-1]
     assert first.data[0].fillcolor != last.data[0].fillcolor      # colours change over time
+    assert fig.data[first.traces[0]].fill == "toself"             # frames point at the pallet traces
     assert fig.layout.sliders[0].steps[-1].label == "25.0"         # last time step included
 
 

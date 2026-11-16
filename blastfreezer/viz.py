@@ -18,6 +18,9 @@ ARROW_COLOR = "#2b3a4a"
 ACCENT = "#6633ff"                    # Rebound logo purple (matches the Streamlit theme)
 ACCENT_LIGHT = "rgba(102, 51, 255, 0.15)"
 ACCENT_EDGE = "rgba(102, 51, 255, 0.45)"
+LOOP_OFF = "#d0d4d8"                  # greyed-out (inactive) boost coil lines and outline
+TEXT_OFF = "#c3c7cc"
+BOX_FILL, BOX_FILL_OFF = "#eceef0", "#f6f7f8"
 
 FACE = {  # face -> (axis, index of the face's end: 0 = low side, 1 = high side)
     "front": ("depth", 0), "back": ("depth", 1), "left": ("width", 0),
@@ -45,11 +48,15 @@ def _fmt_T(cv, T) -> str:
 def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
                 T_core_frames, times: Sequence[float], T_return_frames: Sequence,
                 T_hot: float, T_cold: float, cv: Callable, ul: Callable, T_supply_frames: Sequence,
-                flow_text: str = "", height: int = 560, max_frames: int = MAX_FRAMES) -> go.Figure:
-    """Front view of the cell (width across, height up, depth stacked behind).
+                flow_text: str = "", height: int = 560, max_frames: int = MAX_FRAMES,
+                SST_frames: Sequence | None = None, boost_on: bool = False) -> go.Figure:
+    """Front view of the cell (width across, height up, depth stacked behind) with its air loop.
 
     T_core_frames: array (n_times, n_series) of core temperatures by series position.
     T_supply_frames / T_return_frames: cell supply / return air per time (None = unknown).
+    SST_frames: main coil SST per time (None / NaN = unknown), written inside the coil box.
+    The main coil sits above and to the left of the pallets; the boost coil is drawn
+    above it as a parallel branch, greyed out unless boost_on.
     With more than one time, the figure carries animation frames and its own time
     slider (plus play/pause), so stepping through the solution runs in the browser.
     """
@@ -95,12 +102,26 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
 
     W = (nh - 1) * pitch + size + (nd - 1) * off
     H = (nv - 1) * pitch + size + (nd - 1) * off
-    in_xy, out_xy, label_pos = _arrows(inlet_face, W, H)
+    u = max(1.0, max(W, H) / 5.0)                   # scale for the loop, boxes and gaps
+    L = _loop(inlet_face, W, H, u)
+    SST_frames = [None] * len(times) if SST_frames is None else list(SST_frames)
+    fT = lambda T: "—" if T is None or not np.isfinite(T) else f"{_fmt_T(cv, T)} {ul('temp')}"
+
     def air_labels(T_supply, T_return):
-        f = lambda T: "—" if T is None else f"{_fmt_T(cv, T)} {ul('temp')}"
-        return ["Supply air " + f(T_supply) + (f"<br>{flow_text}" if flow_text else ""), "Return air " + f(T_return)]
+        return ["Supply air " + fT(T_supply) + (f"<br>{flow_text}" if flow_text else ""),
+                "Return air " + fT(T_return)]
+
+    def sst_label(SST):
+        return [f"SST:<br>{fT(SST)}"]
 
     fig = go.Figure()
+    # air loop: main (cell <-> main coil) and the boost branch, lines under everything else
+    boost_color = ARROW_COLOR if boost_on else LOOP_OFF
+    for path, color in [(L["boost_in"], boost_color), (L["boost_out"], boost_color),
+                        (L["supply"], ARROW_COLOR), (L["return"], ARROW_COLOR)]:
+        xs, ys = zip(*path)
+        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color=color, width=4),
+                                 hoverinfo="skip", showlegend=False))
     T0 = T_core_frames[keep[0]]
     for (x0, y0, d, s, idx), c in zip(pallets, colors(T0)):
         fig.add_trace(go.Scatter(
@@ -108,40 +129,64 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
             mode="lines", fill="toself", fillcolor=c, line=dict(color="#1b2633", width=1.2),
             hoveron="fills", hoverinfo="text", showlegend=False,
             text=f"P{s + 1} · width {idx['width'] + 1}, height {idx['height'] + 1}, depth {d + 1}"))
+    i_pal0 = len(fig.data) - len(pallets)
     i_text = len(fig.data)
     fig.add_trace(go.Scatter(x=[x0 + size / 2 for x0, *_ in front], y=[y0 + size / 2 for _, y0, *_ in front],
                              mode="text", text=labels(T0), textfont=dict(color="white", size=font),
                              hovertext=hovers(T0, times[keep[0]]), hoverinfo="text", showlegend=False))
     i_air = len(fig.data)
-    fig.add_trace(go.Scatter(x=[label_pos[0][0], label_pos[1][0]], y=[label_pos[0][1], label_pos[1][1]],
-                             mode="text", text=air_labels(T_supply_frames[keep[0]], T_return_frames[keep[0]]),
-                             textposition=[label_pos[0][2], label_pos[1][2]],
-                             textfont=dict(size=12, color=ARROW_COLOR), hoverinfo="skip", showlegend=False))
+    (sx, sy, sp), (rx, ry, rp) = L["labels"]
+    fig.add_trace(go.Scatter(x=[sx, rx], y=[sy, ry], mode="text",
+                             text=air_labels(T_supply_frames[keep[0]], T_return_frames[keep[0]]),
+                             textposition=[sp, rp], textfont=dict(size=11, color=ARROW_COLOR),
+                             hoverinfo="skip", showlegend=False))
+    i_sst = len(fig.data)
+    bx, by, bw, bh = L["main_box"]
+    fig.add_trace(go.Scatter(x=[bx - bw / 2 + 0.08 * u], y=[by + bh / 2 - 0.08 * u], mode="text",
+                             text=sst_label(SST_frames[keep[0]]), textposition="bottom right",
+                             textfont=dict(size=11, color=ARROW_COLOR), hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(
         x=[None], y=[None], mode="markers", showlegend=False, hoverinfo="skip",
         marker=dict(colorscale=COLORSCALE, cmin=cv("temp", T_cold), cmax=cv("temp", T_hot), color=[0],
                     showscale=True, colorbar=dict(title=dict(text=f"Core<br>{ul('temp')}"),
                                                   thickness=12, len=0.7))))
-    for (x0, y0), (x1, y1) in (in_xy, out_xy):
-        fig.add_annotation(x=x1, y=y1, ax=x0, ay=y0, xref="x", yref="y", axref="x", ayref="y",
-                           showarrow=True, arrowhead=2, arrowsize=1.1, arrowwidth=5,
-                           arrowcolor=ARROW_COLOR, text="")
 
-    pad = 1.5
-    xpad = 3.2 if inlet_face in ("left", "right") else pad      # room for side labels
-    fig.update_xaxes(visible=False, range=[-xpad, W + xpad], fixedrange=True)
-    fig.update_yaxes(visible=False, range=[-pad, H + pad], scaleanchor="x", scaleratio=1, fixedrange=True)
+    # coil boxes and their names
+    for (x, y, w, h), on, name, above in [(L["main_box"], True, "Main Coil", False),
+                                          (L["boost_box"], boost_on, "Boost Coil", True)]:
+        edge, ink = (ARROW_COLOR, ARROW_COLOR) if on else (LOOP_OFF, TEXT_OFF)
+        fig.add_shape(type="rect", x0=x - w / 2, x1=x + w / 2, y0=y - h / 2, y1=y + h / 2,
+                      line=dict(color=edge, width=2), fillcolor=BOX_FILL if on else BOX_FILL_OFF, layer="below")
+        fig.add_annotation(x=x, y=y + h / 2 + 0.1 * u if above else y - h / 2 - 0.1 * u,
+                           yanchor="bottom" if above else "top", text=name, showarrow=False,
+                           font=dict(size=14, color=ink))
+        if name == "Boost Coil" and not boost_on:
+            fig.add_annotation(x=x - w / 2 + 0.08 * u, y=y + h / 2 - 0.08 * u, xanchor="left", yanchor="top",
+                               align="left", text="SST:<br>—", showarrow=False, font=dict(size=11, color=ink))
+
+    # arrowheads (tip, unit direction)
+    heads = [(t, d, ARROW_COLOR) for t, d in L["heads"]] + \
+            [(t, d, ARROW_COLOR if boost_on else LOOP_OFF) for t, d in L["boost_heads"]]
+    for (x1, y1), (dx, dy), color in heads:
+        fig.add_annotation(x=x1, y=y1, ax=x1 - 0.3 * u * dx, ay=y1 - 0.3 * u * dy, xref="x", yref="y",
+                           axref="x", ayref="y", showarrow=True, arrowhead=2, arrowsize=1.0, arrowwidth=4,
+                           arrowcolor=color, text="")
+
+    (x_lo, x_hi), (y_lo, y_hi) = L["range"]
+    fig.update_xaxes(visible=False, range=[x_lo, x_hi], fixedrange=True)
+    fig.update_yaxes(visible=False, range=[y_lo, y_hi], scaleanchor="x", scaleratio=1, fixedrange=True)
     fig.update_layout(height=height, margin=dict(l=0, r=0, t=10, b=10),
                       plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", hovermode="closest")
 
     if len(keep) > 1:
-        idx_traces = list(range(len(pallets))) + [i_text, i_air]
+        idx_traces = list(range(i_pal0, i_pal0 + len(pallets))) + [i_text, i_air, i_sst]
         frames = []
         for k in keep:
             T = T_core_frames[k]
             data = [dict(type="scatter", fillcolor=c) for c in colors(T)]
             data.append(dict(type="scatter", text=labels(T), hovertext=hovers(T, times[k])))
             data.append(dict(type="scatter", text=air_labels(T_supply_frames[k], T_return_frames[k])))
+            data.append(dict(type="scatter", text=sst_label(SST_frames[k])))
             frames.append(go.Frame(name=str(k), data=data, traces=idx_traces))
         fig.frames = frames
         step_args = dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))
@@ -164,29 +209,75 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
     return fig
 
 
-def _arrows(inlet: str, W: float, H: float):
-    """Inlet/outlet arrow end points and label positions (x, y, textposition)."""
-    L, gap = 0.9, 0.35
+def _trim(path, t):
+    """Pull the last point of a polyline back toward the previous one by t."""
+    (x0, y0), (x1, y1) = path[-2], path[-1]
+    d = max(np.hypot(x1 - x0, y1 - y0), 1e-9)
+    return path[:-1] + [(x1 - t * (x1 - x0) / d, y1 - t * (y1 - y0) / d)]
+
+
+def _direction(a, b):
+    d = max(np.hypot(b[0] - a[0], b[1] - a[1]), 1e-9)
+    return (b[0] - a[0]) / d, (b[1] - a[1]) / d
+
+
+def _loop(inlet: str, W: float, H: float, u: float) -> dict:
+    """Air loop geometry for the front view, in the pallet-drawing coordinates.
+
+    The cell occupies [0, W] x [0, H]. The main coil sits above and left of it; air
+    goes coil -> supply leg -> cell -> return leg -> coil. "A" is the coil's left
+    side, "B" its right side. Flow into the low face (left / bottom) leaves the coil
+    from A, so air crosses the coil right -> left; the high faces reverse every path.
+    The boost coil is a branch in parallel with the main coil, directly above it.
+    """
+    gap, leg, rise, coil_gap = 0.3 * u, 2.8 * u, 1.5 * u, 0.15 * u
+    bw, bh = 1.4 * u, 1.15 * u
+    xL = -gap - leg
+    xc, yT = 0.5 * xL, H + rise
+    yT2 = yT + 1.9 * u
+    A, B = xc - bw / 2, xc + bw / 2
     if inlet in ("left", "right"):
-        sx = 1 if inlet == "left" else -1
-        xin = -gap if sx > 0 else W + gap
-        xout = W + gap if sx > 0 else -gap
-        y = H / 2
-        in_xy = ((xin - sx * L, y), (xin, y))
-        out_xy = ((xout, y), (xout + sx * L, y))
-        # anchor at the outer end of each arrow, text extending away from the cell
-        outer_in, outer_out = xin - sx * L, xout + sx * L
-        lab = [(outer_in, y + 0.25, "top left" if sx > 0 else "top right"),
-               (outer_out, y + 0.25, "top right" if sx > 0 else "top left")]
+        yM, xR = H / 2, W + gap + leg
+        main_A = [(A, yT), (xL, yT), (xL, yM), (-gap, yM)]           # coil A -> left face
+        main_B = [(W + gap, yM), (xR, yM), (xR, yT), (B, yT)]        # right face -> coil B
+        low = inlet == "left"
+        lab_low, lab_high = (-gap - 0.1 * u, yM + 0.2 * u, "top left"), (W + gap + 0.1 * u, yM + 0.2 * u, "top right")
+        sup_lab, ret_lab = (lab_low, lab_high) if low else (lab_high, lab_low)
+        x_range = (xL - 0.5 * u, xR + 0.5 * u)
+        y_lo = -0.6 * u
+        riser = xR
     else:
-        sy = 1 if inlet == "bottom" else -1
-        yin = -gap if sy > 0 else H + gap
-        yout = H + gap if sy > 0 else -gap
-        x = W / 2
-        in_xy = ((x, yin - sy * L), (x, yin))
-        out_xy = ((x, yout), (x, yout + sy * L))
-        lab = [(x + 0.2, yin - sy * L / 2, "middle right"), (x + 0.2, yout + sy * L / 2, "middle right")]
-    return in_xy, out_xy, lab
+        xm, yB = W / 2, -gap - 2.2 * u
+        main_A = [(A, yT), (xL, yT), (xL, yB), (xm, yB), (xm, -gap)]  # coil A -> bottom face
+        main_B = [(xm, H + gap), (xm, yT), (B, yT)]                  # top face -> coil B
+        low = inlet == "bottom"
+        lab_low = (xm + 0.2 * u, (-gap + yB) / 2, "middle right")
+        lab_high = (xm + 0.2 * u, (H + gap + yT) / 2 + 0.2 * u, "middle right")
+        sup_lab, ret_lab = (lab_low, lab_high) if low else (lab_high, lab_low)
+        x_range = (xL - 0.5 * u, max(W + 0.5 * u, xm + 3.2 * u))
+        y_lo = yB - 0.6 * u
+        riser = xm
+    xB = (B + riser) / 2
+    boost_A = [(xL, yT), (xL, yT2), (A, yT2)]                         # main loop corner -> boost A
+    boost_B = [(B, yT2), (xB, yT2), (xB, yT)]                         # boost B -> main loop
+    if low:
+        supply, ret = main_A, main_B
+        b_in, b_out = boost_B[::-1], boost_A[::-1]
+    else:
+        supply, ret = main_B[::-1], main_A[::-1]
+        b_in, b_out = boost_A, boost_B
+    ret = _trim(ret, coil_gap)
+    b_in, b_out = _trim(b_in, coil_gap), _trim(b_out, 0.2 * u)
+    d_leave = _direction(ret[0], ret[1])
+    leave_tip = (ret[0][0] + 0.6 * u * d_leave[0], ret[0][1] + 0.6 * u * d_leave[1])
+    heads = [(supply[-1], _direction(supply[-2], supply[-1])),       # into the cell
+             (leave_tip, d_leave),                                    # leaving the cell
+             (ret[-1], _direction(ret[-2], ret[-1]))]                 # into the coil
+    boost_heads = [(b_in[-1], _direction(b_in[-2], b_in[-1])), (b_out[-1], _direction(b_out[-2], b_out[-1]))]
+    return dict(supply=supply, **{"return": ret}, boost_in=b_in, boost_out=b_out,
+                heads=heads, boost_heads=boost_heads, labels=(sup_lab, ret_lab),
+                main_box=(xc, yT, bw, bh), boost_box=(xc, yT2, bw, bh),
+                range=(x_range, (y_lo, yT2 + bh / 2 + 0.8 * u)))
 
 
 # ---- time series --------------------------------------------------------------

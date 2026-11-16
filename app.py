@@ -365,7 +365,7 @@ def model_tab() -> tuple[SimSettings, float, float]:
 
 # ---------------------------------------------------------------- layout ----
 LOGO = Path(__file__).parent / "resources" / "rebound_logo_2C_A big.png"
-h_title, h_logo = st.columns([4, 1], vertical_alignment="center")
+h_title, h_logo = st.columns([22, 3], vertical_alignment="center")      # logo ~60% of a 1/5 column
 h_title.title("Blast Freezing Simulator")
 if LOGO.exists():
     h_logo.image(str(LOGO), width="stretch")
@@ -414,20 +414,21 @@ with right:
     flow_text = f"{cv('flow', shown.cooling.airflow):,.{1 if units() == U.SI else 0}f} {ul('flow')}"
     if res is None:
         n_ser = {"bottom": c.n_high, "top": c.n_high, "left": c.n_wide, "right": c.n_wide}[c.inlet_face]
-        T_frames, times, T_sup, T_ret = [[shown.sim.T_start] * n_ser], [0.0], [None], [None]
+        T_frames, times, T_sup, T_ret, SST = [[shown.sim.T_start] * n_ser], [0.0], [None], [None], [None]
         try:                                  # load-in balance as a preview
             c0 = Cell(shown)
-            T_sup, T_ret = [c0.balance.T_supply], [c0.balance.T_return]
+            T_sup, T_ret, SST = [c0.balance.T_supply], [c0.balance.T_return], [c0.balance.SST]
         except ValueError:
             pass
     else:
         P = res.pallets.pivot(index="time_h", columns="position", values="T_core").sort_index()
         T_frames, times = P.values, list(P.index)
         Cw = res.cell.set_index("time_h").loc[P.index]
-        T_sup, T_ret = Cw["T_supply"].tolist(), Cw["T_return"].tolist()
+        T_sup, T_ret, SST = Cw["T_supply"].tolist(), Cw["T_return"].tolist(), Cw["SST"].tolist()
     st.plotly_chart(
         cell_figure(c.n_deep, c.n_wide, c.n_high, c.inlet_face, T_frames, times, T_ret,
-                    shown.sim.T_start, shown.sim.T_target, cv, ul, T_sup, flow_text, height=480),
+                    shown.sim.T_start, shown.sim.T_target, cv, ul, T_sup, flow_text, height=560,
+                    SST_frames=SST, boost_on=False),
         width="stretch", config={"displayModeBar": False}, key="cell_fig")
     if res is None:
         st.caption("Run the solver, then drag the time slider (or press ▶) to step through the blast.")

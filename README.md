@@ -24,9 +24,12 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 
 - Upper left: inputs in tabs (Pallet, Cell, Model, Boost) and **Run solver**.
 - Upper right: the cell (front view), one square per pallet position, coloured by core temperature
-  from the load-in temperature (red) to the target (blue), with the supply/return air arrows
-  (left/right or bottom/top). The time slider and play button run in the browser, so the cell
-  updates while dragging.
+  from the load-in temperature (red) to the target (blue). The air loop runs from the main coil
+  (above left, showing its SST) through the supply leg into the cell and back through the return
+  leg; arrows follow the chosen flow direction (left/right or bottom/top). The boost coil is drawn
+  above the main coil as a parallel branch and is greyed out until boost is modelled. The time
+  slider and play button run in the browser, so the cell, air temperatures and SST update while
+  dragging.
 - Bottom: Temperature (warmest and coldest pallet core and surface node, supply and return air) and
   Power (cooling, fan) time series.
 
