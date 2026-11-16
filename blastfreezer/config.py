@@ -151,6 +151,46 @@ class Cooling:
         return self.fixed_supply_T if self.fixed_supply_T is not None else self.coil_T_supply_design
 
 
+BOOST_OFF_MODES = ("never", "time", "core")
+
+
+@dataclass
+class Boost:
+    """Boost coil: a second coil with its own fans and refrigeration system, in parallel with
+    the main coil. Return air splits between the coils and their outlets mix into the supply.
+
+    Same inputs as the main coil (defaults copy it). The return-air setpoint on Cooling applies
+    to both; the boost is throttled first. It switches off (fans and refrigeration, so its
+    airflow stops) per off_mode: "never", "time" (at off_time_h), or "core" (when the warmest
+    pallet core reaches off_core_T). Once off it stays off.
+    """
+
+    coil_Q_design: float = 32 * TON
+    coil_T_supply_design: float = _F(-20.0)
+    coil_SST_design: float = _F(-30.0)
+    airflow: float = coil_airflow(32 * TON, _F(-20.0), _F(-12.0))
+    fan_specific_power: float = HP / (1000 * CFM)
+    ref_Q_design: float = 32 * TON
+    ref_SST_design: float = _F(-30.0)
+    refrigerant: str = "NH3"
+    SST_max: float = _F(-20.0)
+    off_mode: str = "never"
+    off_time_h: float = 8.0
+    off_core_T: float = -5.0
+
+    @property
+    def coil_T_return_design(self) -> float:
+        return coil_return(self.coil_Q_design, self.coil_T_supply_design, self.airflow)
+
+    @property
+    def fan_power(self) -> float:
+        return self.fan_specific_power * self.airflow
+
+    @property
+    def T_air_reference(self) -> float:
+        return self.coil_T_supply_design
+
+
 CELL_FACES = ("bottom", "top", "front", "back", "left", "right")
 
 
@@ -187,6 +227,7 @@ class Scenario:
     cell: Cell = field(default_factory=Cell)
     sim: SimSettings = field(default_factory=SimSettings)
     cooling: Cooling = field(default_factory=Cooling)
+    boost: Boost = field(default_factory=Boost)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -201,4 +242,5 @@ class Scenario:
             cell=Cell(**d.get("cell", {})),
             sim=SimSettings(**d.get("sim", {})),
             cooling=Cooling(**d.get("cooling", {})),
+            boost=Boost(**d.get("boost", {})),
         )

@@ -61,8 +61,7 @@ class Pallet:
         T_in = T_ref if T_in is None else T_in
         if m_dot is None:
             m_dot = air_density(T_ref) * s.cooling.airflow
-        self.set_air(T_in, m_dot, s.air.htc if h is None else h)
-        self.dt_stable = self._stable_dt()
+        self.set_air(T_in, m_dot, s.air.htc if h is None else h)          # also sets dt_stable
 
     # ---- air side ---------------------------------------------------------
     def set_air(self, T_in: float, m_dot: float, h: float):
@@ -76,6 +75,7 @@ class Pallet:
             self.eps = 1.0 - math.exp(-self.NTU)
             self.h_eff = self.eps * self.C_air / A if self.C_air > 0 else h
             self.R_film = 1.0 / self.h_eff + self.mat.R_surface             # m^2-K/W outside the product
+            self.dt_stable = self._stable_dt()                              # more flow -> smaller limit
 
     def _stable_dt(self) -> float:
         """Explicit Euler limit: dt <= V_i * C_min / sum(G_i) for every cell."""

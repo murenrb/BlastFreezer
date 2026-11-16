@@ -24,10 +24,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from blastfreezer import (PACKAGING_PRESETS, Air, CellSpec, Packaging, PalletLoad,
-                          Product, Scenario, SimSettings, simulate, summarize)
+                          Product, Scenario, SimSettings, simulate_pair, summarize)
 from blastfreezer import units as U
 from blastfreezer.cell import Cell
-from blastfreezer.config import REFRIGERANT_CHOICES, Cooling, coil_airflow, coil_return
+from blastfreezer.config import REFRIGERANT_CHOICES, Boost, Cooling, coil_airflow, coil_return
 from blastfreezer.pallet import air_density
 from blastfreezer.refrigeration import Coil, RefSystem, design_return_balance
 from blastfreezer.foods import CUSTOM, DEFAULT_FOOD, FOODS, product_kwargs
@@ -203,7 +203,7 @@ def document_height(n_rows: int) -> int:
     return 38 + 35 * n_rows
 
 
-def cell_tab(airflow: float) -> CellSpec:
+def cell_tab(airflow: float, boost_airflow: float) -> CellSpec:
     c1, c2 = st.columns(2, gap="medium")
     c = D.cell
     with c1:
@@ -219,16 +219,19 @@ def cell_tab(airflow: float) -> CellSpec:
         axis_n = {"left": n_wide, "right": n_wide, "bottom": n_high, "top": n_high}[inlet]
         n_lanes = n_deep * n_wide * n_high // axis_n
         dec = 2 if units() == U.SI else 0
-        st.caption(f"Airflow {cv('flow', airflow):,.{dec}f} {ul('flow')} (set on the Cooling tab) · "
+        st.caption(f"Airflow {cv('flow', airflow):,.{dec}f} {ul('flow')} (Cooling tab), plus "
+                   f"{cv('flow', boost_airflow):,.{dec}f} {ul('flow')} while the boost runs (Boost tab) · "
                    f"{n_lanes} lanes × {axis_n} pallets in series · "
-                   f"{cv('flow', airflow / n_lanes):,.{dec}f} {ul('flow')} per lane")
+                   f"{cv('flow', airflow / n_lanes):,.{dec}f} {ul('flow')} per lane without boost")
     return CellSpec(n_deep, n_wide, n_high, inlet)
 
 
-def _readonly(label: str, q: str, si_value: float, help: str, si_scale: float = 1.0):
-    """Greyed-out number showing a calculated value."""
-    st.number_input(f"{label} [{ul(q)}]", value=float(cv(q, si_value * si_scale)), format=U.fmt(q, units()),
-                    disabled=True, help=help)
+def _readonly(label: str, q: str, si_value: float, help: str, si_scale: float = 1.0, pfx: str = ""):
+    """Greyed-out number showing a calculated value. Keyed by prefix + value: a keyed widget ignores
+    later changes to `value`, so a new value must mean a new widget."""
+    v = float(cv(q, si_value * si_scale))
+    st.number_input(f"{label} [{ul(q)}]", value=v, format=U.fmt(q, units()), disabled=True, help=help,
+                    key=f"ro::{pfx}{label}::{v:.9g}")
 
 
 def _forget_widget(qid: str):
@@ -288,55 +291,89 @@ HELP = {
         "Lowest allowed return air temperature; colder than this, frost on the coil becomes too "
         "dendritic. Once return air reaches the setpoint, refrigeration capacity is reduced (SST rises, "
         "like an evaporator pressure regulator) to hold it there while the pallets finish freezing. "
-        "Airflow stays fixed."),
+        "Airflow stays fixed. With the boost coil running, the boost is throttled first, then the main coil."),
+    "boost_off": (
+        "When the boost coil switches off: never, at a set blasting time, or once the warmest pallet "
+        "(the last to freeze) reaches a core temperature. Off means its fans and refrigeration stop, so "
+        "its airflow leaves the cell and only the main coil's airflow remains. It stays off."),
 }
 
 
-def cooling_tab() -> Cooling:
-    c = D.cooling
+def coil_ref_inputs(p: str, c) -> dict:
+    """Coil and Refrigeration system expanders. p prefixes the widget ids ("" main, "b_" boost);
+    c supplies the defaults (Cooling or Boost)."""
     with st.expander("Coil (design point)"):
         c1, c2 = st.columns(2, gap="medium")
         with c1:
-            coil_Q = qw("number", "Design cooling power", "coil_Q", "power", c.coil_Q_design, 1_000, 2_000_000,
-                        si_scale=1e-3, help=HELP["coil_Q"])
-            coil_Ts = qw("number", "Design supply air temp", "coil_Ts", "temp", c.coil_T_supply_design, -60, 0,
-                         help=HELP["coil_Ts"])
-            coil_SST = qw("number", "Design SST", "coil_SST", "temp", c.coil_SST_design, -70, 0,
+            coil_Q = qw("number", "Design cooling power", p + "coil_Q", "power", c.coil_Q_design, 1_000,
+                        2_000_000, si_scale=1e-3, help=HELP["coil_Q"])
+            coil_Ts = qw("number", "Design supply air temp", p + "coil_Ts", "temp", c.coil_T_supply_design,
+                         -60, 0, help=HELP["coil_Ts"])
+            coil_SST = qw("number", "Design SST", p + "coil_SST", "temp", c.coil_SST_design, -70, 0,
                           help=HELP["coil_SST"])
         with c2:
             driver = st.segmented_control("Set by", ["Return air", "Airflow"], default="Return air",
-                                          key="w::coil_driver", help=HELP["driver"])
+                                          key=f"w::{p}coil_driver", help=HELP["driver"])
             driver = driver or "Return air"
             if driver == "Return air":
-                Tr = qw("number", "Design return air temp", "coil_Tr", "temp", c.coil_T_return_design, -60, 10,
-                        help=HELP["coil_Tr"])
+                Tr = qw("number", "Design return air temp", p + "coil_Tr", "temp", c.coil_T_return_design,
+                        -60, 10, help=HELP["coil_Tr"])
                 if Tr <= coil_Ts:
                     st.error("Return air must be warmer than supply air.")
                     Tr = coil_Ts + 0.1
                 airflow = coil_airflow(coil_Q, coil_Ts, Tr)
-                ss["si::coil_flow"] = airflow
-                _forget_widget("coil_flow")
-                _readonly("Airflow", "flow", airflow, HELP["calc_flow"] + " " + HELP["coil_flow"])
+                ss[f"si::{p}coil_flow"] = airflow
+                _forget_widget(p + "coil_flow")
+                _readonly("Airflow", "flow", airflow, HELP["calc_flow"] + " " + HELP["coil_flow"], pfx=p)
             else:
-                airflow = qw("number", "Airflow", "coil_flow", "flow", c.airflow, 0.5, 200, help=HELP["coil_flow"])
+                airflow = qw("number", "Airflow", p + "coil_flow", "flow", c.airflow, 0.5, 200,
+                             help=HELP["coil_flow"])
                 Tr = coil_return(coil_Q, coil_Ts, airflow)
-                ss["si::coil_Tr"] = Tr
-                _forget_widget("coil_Tr")
-                _readonly("Design return air temp", "temp", Tr, HELP["calc_Tr"] + " " + HELP["coil_Tr"])
-            fan_spec = qw("number", "Fan power", "fan_spec", "fanspec", c.fan_specific_power, 0, 10_000,
+                ss[f"si::{p}coil_Tr"] = Tr
+                _forget_widget(p + "coil_Tr")
+                _readonly("Design return air temp", "temp", Tr, HELP["calc_Tr"] + " " + HELP["coil_Tr"],
+                          pfx=p)
+            fan_spec = qw("number", "Fan power", p + "fan_spec", "fanspec", c.fan_specific_power, 0, 10_000,
                           si_scale=1e-3, help=HELP["fan_spec"])
             st.caption(f"Fans: {cv('power', fan_spec * airflow / 1000):,.1f} {ul('power')} of heat "
                        f"({fan_spec * airflow / 745.7:,.0f} hp)")
     with st.expander("Refrigeration system (design point)"):
         c1, c2 = st.columns(2, gap="medium")
         with c1:
-            ref_Q = qw("number", "Design refrigeration power", "ref_Q", "power", c.ref_Q_design, 1_000,
+            ref_Q = qw("number", "Design refrigeration power", p + "ref_Q", "power", c.ref_Q_design, 1_000,
                        2_000_000, si_scale=1e-3, help=HELP["ref_Q"])
-            ref_SST = qw("number", "Design SST", "ref_SST", "temp", c.ref_SST_design, -70, 0, help=HELP["ref_SST"])
+            ref_SST = qw("number", "Design SST", p + "ref_SST", "temp", c.ref_SST_design, -70, 0,
+                         help=HELP["ref_SST"])
         with c2:
             refr = st.selectbox("Refrigerant", REFRIGERANT_CHOICES,
-                                index=REFRIGERANT_CHOICES.index(c.refrigerant), key="w::refrigerant",
+                                index=REFRIGERANT_CHOICES.index(c.refrigerant), key=f"w::{p}refrigerant",
                                 help=HELP["refrigerant"])
+    return dict(coil_Q_design=coil_Q, coil_T_supply_design=coil_Ts, coil_SST_design=coil_SST, airflow=airflow,
+                fan_specific_power=fan_spec, ref_Q_design=ref_Q, ref_SST_design=ref_SST, refrigerant=refr,
+                _Tr=Tr)
+
+
+def design_caption(v: dict):
+    """Coil UA, displacement and the coil-vs-refrigeration meeting point at the design return air."""
+    try:
+        coil = Coil(v["coil_Q_design"], v["coil_T_supply_design"], v["_Tr"], v["coil_SST_design"])
+        ref = RefSystem(v["ref_Q_design"], v["ref_SST_design"], v["refrigerant"])
+    except ValueError as e:
+        st.error(str(e))
+        return
+    bal = design_return_balance(coil, ref, coil.design_C_air)
+    T = lambda x: f"{cv('temp', x):.1f} {ul('temp')}"
+    P = lambda w: f"{cv('power', w / 1000):,.1f} {ul('power')}"
+    st.caption(f"Coil UA {cv('ua', coil.UA / 1000):,.{2 if units() == U.SI else 0}f} {ul('ua')} · "
+               f"{v['refrigerant']} compressor displacement "
+               f"{cv('flow', ref.displacement):,.{3 if units() == U.SI else 0}f} {ul('flow')} · at the design "
+               f"return air, coil and refrigeration meet at SST {T(bal.SST)}, supply air {T(bal.T_supply)}, "
+               f"{P(bal.Q)} (before fan heat and controls).")
+
+
+def cooling_tab() -> Cooling:
+    c = D.cooling
+    v = coil_ref_inputs("", c)
     with st.expander("Controls"):
         c1, c2 = st.columns(2, gap="medium")
         with c1:
@@ -344,24 +381,40 @@ def cooling_tab() -> Cooling:
         with c2:
             T_set = qw("number", "Return air setpoint", "T_set", "temp", c.T_return_setpoint, -70, 0,
                        help=HELP["T_set"])
-    cooling = Cooling(coil_Q_design=coil_Q, coil_T_supply_design=coil_Ts, coil_SST_design=coil_SST,
-                      airflow=airflow, fan_specific_power=fan_spec, ref_Q_design=ref_Q, ref_SST_design=ref_SST,
-                      refrigerant=refr, SST_max=SST_max, T_return_setpoint=T_set)
+    design_caption(v)
+    return Cooling(**{k: x for k, x in v.items() if not k.startswith("_")}, SST_max=SST_max,
+                   T_return_setpoint=T_set)
 
-    try:
-        coil = Coil(coil_Q, coil_Ts, Tr, coil_SST)
-        ref = RefSystem(ref_Q, ref_SST, refr)
-    except ValueError as e:
-        st.error(str(e))
-        return cooling
-    bal = design_return_balance(coil, ref, coil.design_C_air)
-    T = lambda v: f"{cv('temp', v):.1f} {ul('temp')}"
-    P = lambda w: f"{cv('power', w / 1000):,.1f} {ul('power')}"
-    st.caption(f"Coil UA {cv('ua', coil.UA / 1000):,.{2 if units() == U.SI else 0}f} {ul('ua')} · "
-               f"{refr} compressor displacement {cv('flow', ref.displacement):,.{3 if units() == U.SI else 0}f} "
-               f"{ul('flow')} · at the design return air, coil and refrigeration meet at SST {T(bal.SST)}, "
-               f"supply air {T(bal.T_supply)}, {P(bal.Q)} (before fan heat and controls).")
-    return cooling
+
+BOOST_OFF_LABEL = {"never": "Never", "time": "At a set time", "core": "When the warmest pallet core reaches"}
+
+
+def boost_tab() -> Boost:
+    b = D.boost
+    st.caption("A second coil with its own fans and refrigeration system, in parallel with the main coil. "
+               "Return air splits between the coils and their outlets mix into the supply air. Every solve "
+               "runs twice, without and with the boost, to show how much it shortens the blast.")
+    v = coil_ref_inputs("b_", b)
+    with st.expander("Controls"):
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            SST_max = qw("number", "Max SST", "b_SST_max", "temp", b.SST_max, -70, 10, help=HELP["SST_max"])
+        with c2:
+            mode = st.selectbox("Boost shutoff", list(BOOST_OFF_LABEL), key="w::b_off_mode",
+                                index=list(BOOST_OFF_LABEL).index(b.off_mode),
+                                format_func=lambda m: BOOST_OFF_LABEL[m], help=HELP["boost_off"])
+            off_time = qw("slider", "Shut off at", "b_off_time", None, b.off_time_h, 0.5, 72, unit_label="h",
+                          step=0.5, format="%.1f") if mode == "time" else ss.get("si::b_off_time", b.off_time_h)
+            off_T = qw("slider", "Shut off when the warmest core reaches", "b_off_T", "temp", b.off_core_T,
+                       -40, 10) if mode == "core" else ss.get("si::b_off_T", b.off_core_T)
+        st.caption("The return air setpoint (Cooling tab → Controls) applies to both coils; the boost is "
+                   "throttled first, then the main coil.")
+    when = {"never": "runs for the whole blast", "time": f"shuts off at {off_time:.1f} h",
+            "core": f"shuts off when the warmest pallet core reaches {cv('temp', off_T):.1f} {ul('temp')}"}[mode]
+    st.caption(f"**Boost {when}.**")
+    design_caption(v)
+    return Boost(**{k: x for k, x in v.items() if not k.startswith("_")}, SST_max=SST_max, off_mode=mode,
+                 off_time_h=off_time, off_core_T=off_T)
 
 
 def model_tab() -> tuple[SimSettings, float, float]:
@@ -410,66 +463,80 @@ with left:
         product, pkg, load, T0, Tt = pallet_tab()
     with t_cool:
         cooling = cooling_tab()
-    with t_cell:
-        cell = cell_tab(cooling.airflow)
     with t_boost:
-        st.info("Boost inputs will go here.")
+        boost = boost_tab()
+    with t_cell:
+        cell = cell_tab(cooling.airflow, boost.airflow)
     sim.T_start, sim.T_target = T0, Tt
     air = Air(htc, reduction, D.air.cp)
-    scenario = Scenario(product, pkg, load, air, cell, sim, cooling)
+    scenario = Scenario(product, pkg, load, air, cell, sim, cooling, boost)
 
     if st.button("Run solver", type="primary", width="stretch"):
         try:
-            with st.spinner("Solving…"):
-                res = simulate(scenario)
-            ss["res"], ss["res_scn"] = res, scenario.to_dict()
+            with st.spinner("Solving twice: without and with the boost coil…"):
+                off, on = simulate_pair(scenario)
+            ss["res"], ss["res_scn"] = {"off": off, "on": on}, scenario.to_dict()
         except ValueError as e:
             st.error(str(e))
 
 res = ss.get("res")
-if res is not None and (Scenario.from_dict(ss["res_scn"]).cell.inlet_face not in GUI_FACES
-                        or "T_supply" not in res.cell):
+if res is not None and (not isinstance(res, dict) or "flow_m3s" not in res["on"].cell
+                        or Scenario.from_dict(ss["res_scn"]).cell.inlet_face not in GUI_FACES):
     res = None                                    # solution from an older app version
 shown = Scenario.from_dict(ss["res_scn"]) if res is not None else scenario
 stale = res is not None and ss["res_scn"] != scenario.to_dict()
+dec_flow = 1 if units() == U.SI else 0
+fmt_flow = lambda q: f"{cv('flow', q):,.{dec_flow}f} {ul('flow')}"
+fmt_h = lambda t: "—" if t is None else f"{t:.1f} h"
 
 with right:
     st.subheader("Cell")
     if stale:
         st.info("Inputs changed since the last solve. Showing the last solution; click **Run solver** to update.")
     c = shown.cell
-    flow_text = f"{cv('flow', shown.cooling.airflow):,.{1 if units() == U.SI else 0}f} {ul('flow')}"
     if res is None:
         n_ser = {"bottom": c.n_high, "top": c.n_high, "left": c.n_wide, "right": c.n_wide}[c.inlet_face]
-        T_frames, times, T_sup, T_ret, SST = [[shown.sim.T_start] * n_ser], [0.0], [None], [None], [None]
-        try:                                  # load-in balance as a preview
-            c0 = Cell(shown)
-            T_sup, T_ret, SST = [c0.balance.T_supply], [c0.balance.T_return], [c0.balance.SST]
+        T_frames, times = [[shown.sim.T_start] * n_ser], [0.0]
+        T_sup, T_ret, SST, SST_b, on_frames = [None], [None], [None], [None], [True]
+        flows = [fmt_flow(shown.cooling.airflow + shown.boost.airflow)]
+        try:                                  # load-in balance (boost running) as a preview
+            b0 = Cell(shown, boost=True).balance
+            T_sup, T_ret, SST = [b0.T_supply], [b0.T_return], [b0.SST]
+            SST_b = [b0.coils[1].SST] if len(b0.coils) > 1 else [None]
         except ValueError:
             pass
     else:
-        P = res.pallets.pivot(index="time_h", columns="position", values="T_core").sort_index()
+        view = st.segmented_control("Show", ["With boost", "Without boost"], default="With boost",
+                                    key="w::view_run", label_visibility="collapsed") or "With boost"
+        r = res["on"] if view == "With boost" else res["off"]
+        P = r.pallets.pivot(index="time_h", columns="position", values="T_core").sort_index()
         T_frames, times = P.values, list(P.index)
-        Cw = res.cell.set_index("time_h").loc[P.index]
+        Cw = r.cell.set_index("time_h").loc[P.index]
         T_sup, T_ret, SST = Cw["T_supply"].tolist(), Cw["T_return"].tolist(), Cw["SST"].tolist()
+        SST_b, on_frames = Cw["SST_boost"].tolist(), Cw["boost_on"].tolist()
+        flows = [fmt_flow(q) for q in Cw["flow_m3s"]]
     st.plotly_chart(
         cell_figure(c.n_deep, c.n_wide, c.n_high, c.inlet_face, T_frames, times, T_ret,
-                    shown.sim.T_start, shown.sim.T_target, cv, ul, T_sup, flow_text, height=560,
-                    SST_frames=SST, boost_on=False),
+                    shown.sim.T_start, shown.sim.T_target, cv, ul, T_sup, flows, height=560,
+                    SST_frames=SST, boost_frames=on_frames, SST_boost_frames=SST_b),
         width="stretch", config={"displayModeBar": False}, key="cell_fig")
     if res is None:
         st.caption("Run the solver, then drag the time slider (or press ▶) to step through the blast.")
     else:
-        summ = summarize(res, shown)
+        s_off, s_on = summarize(res["off"], shown), summarize(res["on"], shown)
+        t_off, t_on = s_off["cell_freeze_time_h"], s_on["cell_freeze_time_h"]
         m = st.columns(4)
-        fmt_h = lambda t: "—" if t is None else f"{t:.1f} h"
-        m[0].metric("Cell frozen (last pallet)", fmt_h(summ["cell_freeze_time_h"]))
-        m[1].metric("First pallet frozen", fmt_h(summ["first_freeze_time_h"]))
-        m[2].metric("Peak coil load", f"{cv('power', summ['peak_coil_kW']):,.0f} {ul('power')}")
-        m[3].metric("Energy removed", f"{cv('energy', summ['energy_removed_kWh']):,.0f} {ul('energy')}")
-        if not summ["all_frozen"]:
-            st.warning(f"Not every pallet reached the target within {summ['sim_end_h']:.0f} h "
-                       "(Model tab → Max simulated time).")
+        m[0].metric("Cell frozen with boost", fmt_h(t_on),
+                    delta=None if None in (t_on, t_off) else f"{t_on - t_off:+.1f} h vs no boost",
+                    delta_color="inverse", help="Warmest pallet core reaches the target.")
+        m[1].metric("Cell frozen without boost", fmt_h(t_off))
+        m[2].metric("Peak coil load (with boost)", f"{cv('power', s_on['peak_coil_kW']):,.0f} {ul('power')}",
+                    help="Main + boost coil load, including fan heat.")
+        m[3].metric("Boost switched off", "Never" if s_on["boost_off_h"] is None else fmt_h(s_on["boost_off_h"]))
+        for name, sm in (("without", s_off), ("with", s_on)):
+            if not sm["all_frozen"]:
+                st.warning(f"Run {name} boost: not every pallet reached the target within {sm['sim_end_h']:.0f} h "
+                           "(Model tab → Max simulated time).")
 
 st.divider()
 t_temp, t_pow = st.tabs(["Temperature", "Power"])
@@ -477,16 +544,19 @@ if res is None:
     for t in (t_temp, t_pow):
         t.info("Run the solver to see the time series.")
 else:
+    off, on = res["off"], res["on"]
     with t_temp:
-        st.plotly_chart(temperature_figure(res, cv, ul), width="stretch")
-        st.caption("Warmest / coldest = last / first pallet to reach the target. "
-                   "Surface node = outermost finite volume.")
+        st.plotly_chart(temperature_figure(off, on, cv, ul), width="stretch")
+        st.caption("Dashed = without boost, solid = with boost. Warmest pallet = last to reach the target; "
+                   "surface node = its outermost finite volume.")
     with t_pow:
-        st.plotly_chart(power_figure(res, cv, ul, design_kW=shown.cooling.ref_Q_design / 1000), width="stretch")
-        st.caption("Cooling power = coil load = pallet load + fan heat. Fan power is fully added to the air.")
+        st.plotly_chart(power_figure(off, on, cv, ul, design_kW=shown.cooling.ref_Q_design / 1000),
+                        width="stretch")
+        st.caption("Dashed = without boost, solid = with boost. Cooling power = all coil load = pallet load + "
+                   "fan heat; fan power is fully added to the air.")
 
     with st.expander("Model details & data"):
-        info = res.info
+        info = on.info
         a, b = st.columns(2)
         a.dataframe(pd.DataFrame([
             ("Pallet geometry", info["geometry_note"]),
@@ -501,27 +571,47 @@ else:
         b.dataframe(pd.DataFrame([
             ("Flow", f"{info['inlet']} → {info['outlet']}, {info['n_lanes']} lanes × {info['n_series']} in series"),
             ("Spacers", info["spacer_alignment"]),
-            ("HTC applied → effective (ε-NTU)",
-             f"{cv('htc', info['h']):.2f} → {cv('htc', info['h_eff']):.2f} {ul('htc')}"),
-            ("Airflow per lane", f"{cv('flow', info['flow_lane_m3s']):,.2f} {ul('flow')}"),
-            ("Nodes / time step", f"{info['n_nodes']} / {info['dt_s']:.1f} s ({info['n_steps']:,} steps)"),
-            ("Energy balance error", f"{info['energy_balance_error']:.1e}"),
+            ("HTC applied", f"{cv('htc', info['h']):.2f} {ul('htc')}"),
+            ("Effective HTC (ε-NTU), no boost", f"{cv('htc', off.info['h_eff']):.2f} {ul('htc')}"),
+            ("Airflow per lane, no boost", f"{cv('flow', info['flow_lane_m3s']):,.2f} {ul('flow')}"),
+            ("Nodes / time step (boost run)",
+             f"{info['n_nodes']} / {info['dt_s']:.1f} s ({info['n_steps']:,} steps)"),
+            ("Energy balance error", f"{max(info['energy_balance_error'], off.info['energy_balance_error']):.1e}"),
         ], columns=["Item", "Value"]), hide_index=True, width="stretch")
         if info.get("cooling_mode") == "coil":
-            C = res.cell
-            st.dataframe(pd.DataFrame([
-                ("Coil UA / LMTD", f"{cv('ua', info['coil_UA_W_K'] / 1000):,.2f} {ul('ua')} / {info['coil_LMTD']:.2f} K"),
-                ("Coil effectiveness at cell airflow", f"{info['coil_eps']:.3f}"),
-                ("Compressor displacement", f"{cv('flow', info['ref_displacement_m3s']):,.3f} {ul('flow')}"),
-                ("SST range over the blast", f"{cv('temp', C.SST.max()):.1f} → {cv('temp', C.SST.min()):.1f} {ul('temp')}"),
-                ("Supply air range", f"{cv('temp', C.T_supply.max()):.1f} → {cv('temp', C.T_supply.min()):.1f} {ul('temp')}"),
-                ("Steps at SST limit", f"{(C.limit != '').sum()} of {len(C)} recorded"),
-            ], columns=["Cooling", "Value"]), hide_index=True, width="stretch")
-        ft = pd.DataFrame({"Series position": [f"P{i + 1}" for i in range(len(res.freeze_times_h))],
-                           "Freeze time [h]": [None if t is None else round(t, 2) for t in res.freeze_times_h]})
-        st.dataframe(ft, hide_index=True)
+            Co, Cn = off.cell, on.cell
+            rng = lambda x: f"{cv('temp', x.max()):.1f} → {cv('temp', x.min()):.1f} {ul('temp')}"
+            rows = [
+                ("Main coil UA / LMTD", f"{cv('ua', info['coil_UA_W_K'] / 1000):,.2f} {ul('ua')} / "
+                                        f"{info['coil_LMTD']:.2f} K"),
+                ("Main coil effectiveness", f"{info['coil_eps']:.3f}"),
+                ("Main compressor displacement", f"{cv('flow', info['ref_displacement_m3s']):,.3f} {ul('flow')}"),
+            ]
+            if "boost_UA_W_K" in info:
+                rows += [
+                    ("Boost coil UA / LMTD", f"{cv('ua', info['boost_UA_W_K'] / 1000):,.2f} {ul('ua')} / "
+                                             f"{info['boost_LMTD']:.2f} K"),
+                    ("Boost coil effectiveness", f"{info['boost_eps']:.3f}"),
+                    ("Boost compressor displacement",
+                     f"{cv('flow', info['boost_displacement_m3s']):,.3f} {ul('flow')}"),
+                    ("Boost SST range", rng(Cn.SST_boost.dropna()) if Cn.SST_boost.notna().any() else "—"),
+                ]
+            rows += [
+                ("Main SST range: no boost / boost", f"{rng(Co.SST)} / {rng(Cn.SST)}"),
+                ("Supply air range: no boost / boost", f"{rng(Co.T_supply)} / {rng(Cn.T_supply)}"),
+                ("Records at a control limit (boost run)",
+                 f"main {(Cn.limit != '').sum()}, boost {(Cn.limit_boost != '').sum()} of {len(Cn)}"),
+            ]
+            st.dataframe(pd.DataFrame(rows, columns=["Cooling", "Value"]), hide_index=True, width="stretch")
+        rnd = lambda t: None if t is None else round(t, 2)
+        st.dataframe(pd.DataFrame({
+            "Series position": [f"P{i + 1}" for i in range(len(on.freeze_times_h))],
+            "Freeze time, no boost [h]": [rnd(t) for t in off.freeze_times_h],
+            "Freeze time, boost [h]": [rnd(t) for t in on.freeze_times_h]}), hide_index=True)
+        both = lambda key: pd.concat([getattr(off, key).assign(run="no boost"),
+                                      getattr(on, key).assign(run="boost")]).to_csv(index=False)
         d1, d2, d3 = st.columns(3)
-        d1.download_button("Pallet history CSV (SI)", res.pallets.to_csv(index=False), "pallets.csv", "text/csv")
-        d2.download_button("Cell history CSV (SI)", res.cell.to_csv(index=False), "cell.csv", "text/csv")
+        d1.download_button("Pallet history CSV (SI)", both("pallets"), "pallets.csv", "text/csv")
+        d2.download_button("Cell history CSV (SI)", both("cell"), "cell.csv", "text/csv")
         d3.download_button("Scenario JSON", json.dumps(shown.to_dict(), indent=2), "scenario.json",
                            "application/json")

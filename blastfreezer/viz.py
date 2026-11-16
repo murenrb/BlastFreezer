@@ -48,15 +48,18 @@ def _fmt_T(cv, T) -> str:
 def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
                 T_core_frames, times: Sequence[float], T_return_frames: Sequence,
                 T_hot: float, T_cold: float, cv: Callable, ul: Callable, T_supply_frames: Sequence,
-                flow_text: str = "", height: int = 560, max_frames: int = MAX_FRAMES,
-                SST_frames: Sequence | None = None, boost_on: bool = False) -> go.Figure:
+                flow_text: str | Sequence[str] = "", height: int = 560, max_frames: int = MAX_FRAMES,
+                SST_frames: Sequence | None = None, boost_frames: Sequence[bool] | None = None,
+                SST_boost_frames: Sequence | None = None) -> go.Figure:
     """Front view of the cell (width across, height up, depth stacked behind) with its air loop.
 
     T_core_frames: array (n_times, n_series) of core temperatures by series position.
     T_supply_frames / T_return_frames: cell supply / return air per time (None = unknown).
     SST_frames: main coil SST per time (None / NaN = unknown), written inside the coil box.
+    flow_text: supply airflow label, one string or one per time (it changes when the boost stops).
     The main coil sits above and to the left of the pallets; the boost coil is drawn
-    above it as a parallel branch, greyed out unless boost_on.
+    above it as a parallel branch: black while boost_frames is True, greyed out otherwise,
+    with SST_boost_frames written inside.
     With more than one time, the figure carries animation frames and its own time
     slider (plus play/pause), so stepping through the solution runs in the browser.
     """
@@ -104,12 +107,27 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
     H = (nv - 1) * pitch + size + (nd - 1) * off
     u = max(1.0, max(W, H) / 5.0)                   # scale for the loop, boxes and gaps
     L = _loop(inlet_face, W, H, u)
-    SST_frames = [None] * len(times) if SST_frames is None else list(SST_frames)
+    nt = len(times)
+    SST_frames = [None] * nt if SST_frames is None else list(SST_frames)
+    SST_boost_frames = [None] * nt if SST_boost_frames is None else list(SST_boost_frames)
+    boost_frames = [False] * nt if boost_frames is None else [bool(b) for b in boost_frames]
+    flow_frames = [flow_text] * nt if isinstance(flow_text, str) else list(flow_text)
     fT = lambda T: "—" if T is None or not np.isfinite(T) else f"{_fmt_T(cv, T)} {ul('temp')}"
 
-    def air_labels(T_supply, T_return):
-        return ["Supply air " + fT(T_supply) + (f"<br>{flow_text}" if flow_text else ""),
+    def air_labels(T_supply, T_return, flow):
+        return ["Supply air " + fT(T_supply) + (f"<br>{flow}" if flow else ""),
                 "Return air " + fT(T_return)]
+
+    def boost_style(on, SST):
+        """Frame data for the boost traces: 2 lines, 2 heads, box, text (name + SST)."""
+        c = ARROW_COLOR if on else LOOP_OFF
+        ink = ARROW_COLOR if on else TEXT_OFF
+        line = dict(type="scatter", line=dict(color=c, width=4))
+        head = dict(type="scatter", fillcolor=c, line=dict(color=c, width=1))
+        box = dict(type="scatter", fillcolor=BOX_FILL if on else BOX_FILL_OFF, line=dict(color=c, width=2))
+        text = dict(type="scatter", text=["Boost Coil", f"SST:<br>{fT(SST) if on else '—'}"],
+                    textfont=dict(size=[14, 11], color=ink))
+        return [line, line, head, head, box, text]
 
     def sst_label(SST):
         return [f"SST:<br>{fT(SST)}"]
@@ -118,20 +136,42 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
     # air loop: main (cell <-> main coil) and the boost branch, lines under everything else
     # Lines stop inside the base of their arrowhead; heads are triangles in drawing units, so
     # they scale with the drawing and the line can never poke out past the tip.
-    boost_color = ARROW_COLOR if boost_on else LOOP_OFF
     head_len, head_half = 0.4 * u, 0.2 * u
-    for path, color in [(L["boost_in"], boost_color), (L["boost_out"], boost_color),
-                        (L["supply"], ARROW_COLOR), (L["return"], ARROW_COLOR)]:
+
+    def add_line(path, color):
         xs, ys = zip(*_trim(path, 0.75 * head_len))
         fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color=color, width=4),
                                  hoverinfo="skip", showlegend=False))
-    for (tx, ty), (dx, dy), color in [(t, d, ARROW_COLOR) for t, d in L["heads"]] + \
-                                     [(t, d, boost_color) for t, d in L["boost_heads"]]:
+
+    def add_head(tip, d, color):
+        (tx, ty), (dx, dy) = tip, d
         bx_, by_ = tx - head_len * dx, ty - head_len * dy
         fig.add_trace(go.Scatter(x=[tx, bx_ - head_half * dy, bx_ + head_half * dy, tx],
                                  y=[ty, by_ + head_half * dx, by_ - head_half * dx, ty],
                                  mode="lines", fill="toself", fillcolor=color, line=dict(color=color, width=1),
                                  hoverinfo="skip", showlegend=False, name="arrowhead"))
+
+    # boost branch first (animated: black while running, grey when off)
+    b0 = keep[0]
+    st0 = boost_style(boost_frames[b0], SST_boost_frames[b0])
+    i_boost0 = len(fig.data)
+    add_line(L["boost_in"], st0[0]["line"]["color"])
+    add_line(L["boost_out"], st0[1]["line"]["color"])
+    for tip, d in L["boost_heads"]:
+        add_head(tip, d, st0[2]["fillcolor"])
+    x, y, w, h = L["boost_box"]
+    fig.add_trace(go.Scatter(x=[x - w / 2, x + w / 2, x + w / 2, x - w / 2, x - w / 2],
+                             y=[y - h / 2, y - h / 2, y + h / 2, y + h / 2, y - h / 2], mode="lines",
+                             fill="toself", fillcolor=st0[4]["fillcolor"], line=st0[4]["line"],
+                             hoverinfo="skip", showlegend=False, name="coil box"))
+    fig.add_trace(go.Scatter(x=[x, x - w / 2 + 0.08 * u], y=[y + h / 2 + 0.1 * u, y + h / 2 - 0.08 * u],
+                             mode="text", text=st0[5]["text"], textposition=["top center", "bottom right"],
+                             textfont=st0[5]["textfont"], hoverinfo="skip", showlegend=False))
+    i_boost = list(range(i_boost0, len(fig.data)))
+    for path in (L["supply"], L["return"]):
+        add_line(path, ARROW_COLOR)
+    for tip, d in L["heads"]:
+        add_head(tip, d, ARROW_COLOR)
     T0 = T_core_frames[keep[0]]
     for (x0, y0, d, s, idx), c in zip(pallets, colors(T0)):
         fig.add_trace(go.Scatter(
@@ -147,7 +187,8 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
     i_air = len(fig.data)
     (sx, sy, sp), (rx, ry, rp) = L["labels"]
     fig.add_trace(go.Scatter(x=[sx, rx], y=[sy, ry], mode="text",
-                             text=air_labels(T_supply_frames[keep[0]], T_return_frames[keep[0]]),
+                             text=air_labels(T_supply_frames[keep[0]], T_return_frames[keep[0]],
+                                             flow_frames[keep[0]]),
                              textposition=[sp, rp], textfont=dict(size=11, color=ARROW_COLOR),
                              hoverinfo="skip", showlegend=False))
     i_sst = len(fig.data)
@@ -161,18 +202,12 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
                     showscale=True, colorbar=dict(title=dict(text=f"Core<br>{ul('temp')}"),
                                                   thickness=12, len=0.7))))
 
-    # coil boxes and their names
-    for (x, y, w, h), on, name, above in [(L["main_box"], True, "Main Coil", False),
-                                          (L["boost_box"], boost_on, "Boost Coil", True)]:
-        edge, ink = (ARROW_COLOR, ARROW_COLOR) if on else (LOOP_OFF, TEXT_OFF)
-        fig.add_shape(type="rect", x0=x - w / 2, x1=x + w / 2, y0=y - h / 2, y1=y + h / 2,
-                      line=dict(color=edge, width=2), fillcolor=BOX_FILL if on else BOX_FILL_OFF, layer="below")
-        fig.add_annotation(x=x, y=y + h / 2 + 0.1 * u if above else y - h / 2 - 0.1 * u,
-                           yanchor="bottom" if above else "top", text=name, showarrow=False,
-                           font=dict(size=14, color=ink))
-        if name == "Boost Coil" and not boost_on:
-            fig.add_annotation(x=x - w / 2 + 0.08 * u, y=y + h / 2 - 0.08 * u, xanchor="left", yanchor="top",
-                               align="left", text="SST:<br>—", showarrow=False, font=dict(size=11, color=ink))
+    # main coil box and name (always running)
+    x, y, w, h = L["main_box"]
+    fig.add_shape(type="rect", x0=x - w / 2, x1=x + w / 2, y0=y - h / 2, y1=y + h / 2,
+                  line=dict(color=ARROW_COLOR, width=2), fillcolor=BOX_FILL, layer="below")
+    fig.add_annotation(x=x, y=y - h / 2 - 0.1 * u, yanchor="top", text="Main Coil", showarrow=False,
+                       font=dict(size=14, color=ARROW_COLOR))
 
     (x_lo, x_hi), (y_lo, y_hi) = L["range"]
     # constrain="domain": keep 1:1 by shrinking the plot area, never by widening the ranges.
@@ -185,14 +220,16 @@ def cell_figure(n_deep: int, n_wide: int, n_high: int, inlet_face: str,
                       plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", hovermode="closest")
 
     if len(keep) > 1:
-        idx_traces = list(range(i_pal0, i_pal0 + len(pallets))) + [i_text, i_air, i_sst]
+        idx_traces = list(range(i_pal0, i_pal0 + len(pallets))) + [i_text, i_air, i_sst] + i_boost
         frames = []
         for k in keep:
             T = T_core_frames[k]
             data = [dict(type="scatter", fillcolor=c) for c in colors(T)]
             data.append(dict(type="scatter", text=labels(T), hovertext=hovers(T, times[k])))
-            data.append(dict(type="scatter", text=air_labels(T_supply_frames[k], T_return_frames[k])))
+            data.append(dict(type="scatter", text=air_labels(T_supply_frames[k], T_return_frames[k],
+                                                              flow_frames[k])))
             data.append(dict(type="scatter", text=sst_label(SST_frames[k])))
+            data += boost_style(boost_frames[k], SST_boost_frames[k])
             frames.append(go.Frame(name=str(k), data=data, traces=idx_traces))
         fig.frames = frames
         step_args = dict(mode="immediate", frame=dict(duration=0, redraw=True), transition=dict(duration=0))
@@ -294,47 +331,67 @@ def extreme_positions(freeze_times_h: Sequence, final_T_core: Sequence[float]) -
     return order[0] + 1, order[-1] + 1
 
 
-def temperature_figure(res, cv: Callable, ul: Callable, height: int = 420) -> go.Figure:
+# one colour per quantity; dashed = without boost, solid = with boost
+SERIES_COLORS = {"core": "#d7263d", "surface": "#f28e2b", "supply": "#1f77b4", "return": "#17becf",
+                 "SST": "#2ca02c", "SST_boost": ACCENT, "coil": "#1f77b4", "boost_coil": ACCENT,
+                 "pallet": "#d7263d", "fan": "#f28e2b"}
+RUN_DASH = {False: "dash", True: "solid"}
+RUN_NAME = {False: "no boost", True: "boost"}
+
+
+def warmest_position(res) -> int:
+    """1-based series position of the warmest pallet (last to reach the target)."""
     P = res.pallets
     final = P[P.time_h == P.time_h.max()].sort_values("position").T_core.tolist()
-    cold, warm = extreme_positions(res.freeze_times_h, final)
+    return extreme_positions(res.freeze_times_h, final)[1]
+
+
+def _runs(off, on):
+    return [(r, b) for r, b in ((off, False), (on, True)) if r is not None]
+
+
+def _add(fig, x, y, key, label, boost, width=2.0):
+    fig.add_trace(go.Scatter(x=x, y=y, name=f"{label} · {RUN_NAME[boost]}", legendgroup=key,
+                             line=dict(color=SERIES_COLORS[key], dash=RUN_DASH[boost], width=width)))
+
+
+def temperature_figure(off, on, cv: Callable, ul: Callable, height: int = 440) -> go.Figure:
+    """Warmest pallet core and surface node, supply and return air, SSTs.
+
+    off / on: results without and with the boost coil (either may be None).
+    """
     fig = go.Figure()
-    styles = {warm: ("#d7263d", "Warmest"), cold: ("#1f5fbf", "Coldest")}
-    for pos in dict.fromkeys([warm, cold]):
-        color, label = styles[pos]
-        g = P[P.position == pos]
-        fig.add_trace(go.Scatter(x=g.time_h, y=cv("temp", g.T_core), name=f"{label} (P{pos}) core",
-                                 line=dict(color=color, width=2.5)))
+    for res, boost in _runs(off, on):
+        pos = warmest_position(res)
+        g = res.pallets[res.pallets.position == pos]
         prof = res.profiles[pos]
-        fig.add_trace(go.Scatter(x=prof.index, y=cv("temp", prof.iloc[:, -1].values),
-                                 name=f"{label} (P{pos}) surface node", line=dict(color=color, dash="dash")))
-    C = res.cell
-    fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_supply), name="Supply air (after coil + fans)",
-                             line=dict(color="#5a6b7b", dash="dot")))
-    fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.T_return), name="Return air (to coil)",
-                             line=dict(color="#2b3a4a", dash="dashdot")))
-    if "SST" in C and C.SST.notna().any():
-        fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C.SST), name="SST",
-                                 line=dict(color="#2a9d8f", width=1.5)))
+        C = res.cell
+        _add(fig, g.time_h, cv("temp", g.T_core), "core", f"Core, warmest pallet (P{pos})", boost, 2.5)
+        _add(fig, prof.index, cv("temp", prof.iloc[:, -1].values), "surface", "Surface node, warmest pallet", boost)
+        _add(fig, C.time_h, cv("temp", C.T_supply), "supply", "Supply air", boost)
+        _add(fig, C.time_h, cv("temp", C.T_return), "return", "Return air", boost)
+        if C.SST.notna().any():
+            _add(fig, C.time_h, cv("temp", C.SST), "SST", "SST main coil", boost, 1.5)
+        if boost and "SST_boost" in C and C.SST_boost.notna().any():
+            _add(fig, C.time_h, cv("temp", C.SST_boost), "SST_boost", "SST boost coil", boost, 1.5)
     _finish(fig, ul("temp"), height)
     return fig
 
 
-def power_figure(res, cv: Callable, ul: Callable, height: int = 420,
+def power_figure(off, on, cv: Callable, ul: Callable, height: int = 440,
                  design_kW: float | None = None) -> go.Figure:
-    C = res.cell
+    """Total coil load, boost coil load, pallet load and fan power, without (dashed) and with boost."""
     fig = go.Figure()
-    coil = C["Q_coil_kW"] if "Q_coil_kW" in C else C.Q_cell_kW
-    fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", coil), name="Cooling power (coil)",
-                             line=dict(color="#1f5fbf", width=2.5)))
-    fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", C.Q_cell_kW), name="Pallet load",
-                             line=dict(color="#8b4fd6", width=1.5, dash="dash")))
+    for res, boost in _runs(off, on):
+        C = res.cell
+        _add(fig, C.time_h, cv("power", C.Q_coil_kW), "coil", "Cooling power, all coils", boost, 2.5)
+        if boost and C.boost_on.any():
+            _add(fig, C.time_h, cv("power", C.Q_boost_kW), "boost_coil", "Boost coil load", boost, 1.5)
+        _add(fig, C.time_h, cv("power", C.Q_cell_kW), "pallet", "Pallet load", boost, 1.5)
+        _add(fig, C.time_h, cv("power", C.fan_kW), "fan", "Fan power", boost, 1.5)
     if design_kW is not None:
         fig.add_hline(y=cv("power", design_kW), line_dash="dot", line_color="#888",
-                      annotation_text="Refrigeration design")
-    fan = C["fan_kW"] if "fan_kW" in C else np.zeros(len(C))
-    fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", fan), name="Fan power",
-                             line=dict(color="#e08a1e", width=2)))
+                      annotation_text="Main refrigeration design")
     _finish(fig, ul("power"), height)
     return fig
 
@@ -342,4 +399,4 @@ def power_figure(res, cv: Callable, ul: Callable, height: int = 420,
 def _finish(fig, y_unit, height):
     fig.update_layout(height=height, xaxis_title="Blasting time [h]", yaxis_title=y_unit,
                       margin=dict(l=10, r=10, t=10, b=10), hovermode="x unified",
-                      legend=dict(orientation="h", y=-0.2))
+                      legend=dict(orientation="h", y=-0.22))

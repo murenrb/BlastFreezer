@@ -35,8 +35,12 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
   above the main coil as a parallel branch and is greyed out until boost is modelled. The time
   slider and play button run in the browser, so the cell, air temperatures and SST update while
   dragging.
-- Bottom: Temperature (warmest and coldest pallet core and surface node, supply and return air) and
-  Power (cooling, fan) time series.
+- Every solve runs twice, without and with the boost coil. The metrics show both cell freeze times
+  and the time saved; the cell view toggles between the two runs (the boost coil is drawn black while
+  it runs and greys out when it shuts off).
+- Bottom: Temperature (warmest pallet core and surface node, supply and return air, main and boost
+  SST) and Power (all-coil load, boost coil load, pallet load, fans). One colour per quantity;
+  dashed = without boost, solid = with boost. All "frozen" decisions use the warmest pallet.
 
 ## Model
 
@@ -73,6 +77,18 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
   Return air is not allowed below a setpoint (frost); once reached, SST rises to hold it.
 - Each time step, with pallet states frozen, cell return air is linear in supply air, so the coil,
   refrigeration, fans and pallets are balanced exactly for SST and supply air.
+
+**Boost coil**
+- A second coil with its own fans and refrigeration system (same inputs as the main coil), in
+  parallel with it. Return air splits between the coils; their outlets (plus each one's fan heat)
+  mix by capacity rate into the supply air. While it runs, its airflow is added to every lane; the
+  surface HTC stays constant (the extra flow acts through air capacity in the eps-NTU air side).
+- Balance: for a fixed airflow each unit's free SST depends only on return air, so it is tabulated
+  once per unit; the mixed balance is then one monotonic equation in return air, solved each step.
+- Controls: each unit has its own max SST. The return-air setpoint applies to both: the boost is
+  throttled first (down to zero load), then the main coil. Coils never act as heaters.
+- Shutoff: never, at a set time, or when the warmest pallet core reaches a temperature. Off means
+  fans and refrigeration stop, so the cell drops back to the main airflow. It stays off.
 
 ## Setup
 

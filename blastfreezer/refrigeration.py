@@ -21,10 +21,22 @@ from CoolProp, tabulated once per run.
 Balance
 -------
 Within a time step the pallet states are frozen, so cell return air is linear
-in supply air: T_r = a + b * T_s (see Lane.linear_return). With the coil,
-    T_s = (1 - eps) T_r + eps SST   ->   T_s(SST) = ((1-eps) a + eps SST) / (1 - (1-eps) b)
-and Q_coil(SST) decreases with SST while Q_ref(SST) increases, so
-Q_coil(SST) = Q_ref(SST) has one root, found with brentq.
+in supply air: T_r = a + b * T_s (see Lane.linear_return). One or more coil
+units (coil + its own fans + its own refrigeration system) run in parallel:
+each takes return air, and their outlets mix into the supply air.
+
+For one unit at a fixed airflow, the free balance Q_coil = Q_ref fixes SST as a
+function of return air alone:  C eps (T_r - SST) = Q_ref(SST), i.e.
+T_r = SST + Q_ref(SST) / (C eps), which is tabulated once per unit and inverted
+by interpolation (exact for the tabulated Q_ref). Each unit's outlet is then
+T_c = T_r - eps (T_r - SST) + fan heat; the mixed supply is the C-weighted mean,
+and T_r = a + b * T_s(T_r) has one root (the right side rises slower than T_r),
+found with brentq.
+
+Controls: a unit whose free SST is above its SST_max is held at SST_max and the
+coil gets what it needs. If the free return air would be colder than the
+return-air setpoint, return air is held at the setpoint and units are throttled
+(SST raised, down to zero load) in reverse order: the last unit (boost) first.
 """
 
 from __future__ import annotations
@@ -126,56 +138,116 @@ class RefSystem:
 
 
 @dataclass(frozen=True)
-class Balance:
+class CoilState:
+    """One coil unit in a balance."""
+    name: str
     SST: float
-    T_supply: float          # air entering the pallets (coil outlet + fan heat)
-    T_return: float          # air leaving the pallets = entering the coil
-    Q: float                 # W, coil load (= pallet load + fan heat)
-    limited: str = ""        # "" | "SST max" | "return setpoint" | "SST floor" | "SST ceiling"
-    T_coil_out: float = float("nan")
-    Q_fan: float = 0.0
+    Q: float                 # W, coil load
+    T_out: float             # air leaving the coil, before fan heat
+    Q_fan: float             # W
+    C_air: float             # W/K
+    limited: str = ""
+
+
+@dataclass(frozen=True)
+class Balance:
+    SST: float               # first (main) unit
+    T_supply: float          # mixed air entering the pallets (coil outlets + fan heat)
+    T_return: float          # air leaving the pallets = entering every coil
+    Q: float                 # W, total coil load (= pallet load + fan heat)
+    limited: str = ""        # first unit: "" | "SST max" | "return setpoint" | "SST floor" | "SST ceiling"
+    T_coil_out: float = float("nan")   # first unit, before fan heat
+    Q_fan: float = 0.0       # W, all units
+    coils: tuple = ()        # CoilState per unit
+
+
+class CoilUnit:
+    """A coil with its own fans and refrigeration system, at a fixed airflow."""
+
+    def __init__(self, coil: Coil, ref: RefSystem, C_air: float, fan_W: float = 0.0,
+                 SST_max: float | None = None, name: str = "main"):
+        self.name, self.C_air, self.fan_W, self.SST_max = name, C_air, fan_W, SST_max
+        self.eps = coil.effectiveness(C_air)
+        self.d = fan_W / C_air
+        S, vc = _volumetric_capacity_table(ref.refrigerant)
+        self._S = S
+        self._Tr = S + ref.displacement * vc / (self.eps * C_air)   # return air at which free SST = S
+
+    def free_SST(self, T_r: float) -> tuple[float, str]:
+        if T_r <= self._Tr[0]:
+            S, lim = float(self._S[0]), "SST floor"
+        elif T_r >= self._Tr[-1]:
+            S, lim = float(self._S[-1]), "SST ceiling"
+        else:
+            S, lim = float(np.interp(T_r, self._Tr, self._S)), ""
+        if self.SST_max is not None and S > self.SST_max:
+            S, lim = self.SST_max, "SST max"
+        return S, lim
+
+    def T_coil(self, T_r: float, SST: float) -> float:
+        """Air leaving the coil, before fan heat."""
+        return T_r - self.eps * (T_r - SST)
+
+
+def solve_parallel(a: float, b: float, units: list[CoilUnit], *,
+                   T_return_min: float | None = None) -> Balance:
+    """Close coils + refrigeration + load with cell return air T_r = a + b * T_supply."""
+    C_tot = sum(u.C_air for u in units)
+
+    def states(T_r):
+        return [u.free_SST(T_r) for u in units]
+
+    def T_mix(T_r, SSTs):
+        return sum(u.C_air * (u.T_coil(T_r, S) + u.d) for u, S in zip(units, SSTs)) / C_tot
+
+    def h(T_r):
+        return a + b * T_mix(T_r, [S for S, _ in states(T_r)]) - T_r
+
+    lo, hi = -150.0, 150.0
+    while h(lo) < 0.0:
+        lo -= 100.0
+    while h(hi) > 0.0:
+        hi += 100.0
+    T_r = brentq(h, lo, hi, xtol=1e-10)
+    st = states(T_r)
+    SSTs, labels = [S for S, _ in st], [lim for _, lim in st]
+
+    if T_return_min is not None and b > 0.0 and T_r < T_return_min:
+        T_r = T_return_min
+        SSTs, labels = [S for S, _ in states(T_r)], [lim for _, lim in states(T_r)]
+        need = (T_r - a) / b - T_mix(T_r, SSTs)            # mixed supply must warm by this much
+        for i in reversed(range(len(units))):             # last unit (boost) throttles first
+            if need <= 0.0:
+                break
+            u = units[i]
+            room = u.C_air * u.eps * (T_r - SSTs[i]) / C_tot  # warming available by unloading it fully
+            if room <= 0.0:
+                continue
+            take = min(need, room)
+            SSTs[i] += take * C_tot / (u.C_air * u.eps)
+            labels[i] = "return setpoint"
+            need -= take
+        if need > 1e-9:                                   # everything unloaded: return air floats up
+            D = sum(u.C_air * u.d for u in units) / C_tot
+            T_r = (a + b * D) / (1.0 - b) if b < 1.0 else T_r
+            SSTs = [T_r] * len(units)
+
+    coils = []
+    for u, S, lim in zip(units, SSTs, labels):
+        Tc = u.T_coil(T_r, S)
+        coils.append(CoilState(u.name, float(S), float(u.C_air * (T_r - Tc)), float(Tc), float(u.fan_W),
+                               float(u.C_air), lim))
+    T_s = T_mix(T_r, SSTs)
+    m = coils[0]
+    return Balance(m.SST, float(T_s), float(T_r), float(sum(c.Q for c in coils)), m.limited, m.T_out,
+                   float(sum(c.Q_fan for c in coils)), tuple(coils))
 
 
 def solve_balance(a: float, b: float, C_air: float, coil: Coil, ref: RefSystem, *,
                   fan_W: float = 0.0, SST_max: float | None = None,
                   T_return_min: float | None = None) -> Balance:
-    """Close coil + refrigeration + load, with cell return air T_r = a + b * T_supply.
-
-    Fan heat is added to the air leaving the coil (dT = fan_W / C_air).
-    SST_max: the plant holds suction at or below this; above it the coil gets what it needs.
-    T_return_min: return air setpoint; when the free balance would go colder, capacity is
-    reduced (SST rises) to hold the return air at the setpoint.
-    """
-    eps = coil.effectiveness(C_air)
-    d = fan_W / C_air
-    a2 = a + b * d                       # return air as a function of coil outlet: T_r = a2 + b T_c
-    den = 1.0 - (1.0 - eps) * b
-
-    def T_c(sst):
-        return ((1.0 - eps) * a2 + eps * sst) / den
-
-    def f(sst):
-        return C_air * (a2 + (b - 1.0) * T_c(sst)) - float(ref.capacity(sst))
-
-    lo, hi = ref.SST_min, ref.SST_max
-    limited = ""
-    if f(lo) <= 0.0:
-        sst, limited = lo, "SST floor"
-    elif f(hi) >= 0.0:
-        sst, limited = hi, "SST ceiling"
-    else:
-        sst = brentq(f, lo, hi, xtol=1e-6)
-    if SST_max is not None and sst > SST_max:
-        sst, limited = SST_max, "SST max"
-    Tc = T_c(sst)
-    Tr = a2 + b * Tc
-    if T_return_min is not None and Tr < T_return_min:
-        Tr = T_return_min
-        Tc = (Tr - a2) / b
-        sst = (Tc - (1.0 - eps) * Tr) / eps
-        limited = "return setpoint"
-    return Balance(float(sst), float(Tc + d), float(Tr), float(C_air * (Tr - Tc)), limited,
-                   float(Tc), float(fan_W))
+    """Single coil unit: see solve_parallel. Fan heat is added to the air leaving the coil."""
+    return solve_parallel(a, b, [CoilUnit(coil, ref, C_air, fan_W, SST_max)], T_return_min=T_return_min)
 
 
 def design_return_balance(coil: Coil, ref: RefSystem, C_air: float) -> Balance:

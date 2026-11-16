@@ -81,7 +81,7 @@ def test_sst_max_caps_suction():
 
 def test_return_setpoint_holds_return_air():
     c, r = _coil(), RefSystem(32 * TON, _F(-30), "NH3")
-    a, b = -40.0, 0.9                           # light load: free balance would go very cold
+    a, b = -4.0, 0.9                            # light load: free balance goes to about -61 C
     free = solve_balance(a, b, c.design_C_air, c, r)
     held = solve_balance(a, b, c.design_C_air, c, r, T_return_min=free.T_return + 2.0)
     assert held.T_return == pytest.approx(free.T_return + 2.0)
@@ -115,3 +115,10 @@ def test_co2_sst_stays_above_triple_point():
 def test_invalid_coil_design_rejected():
     with pytest.raises(ValueError):
         Coil(32 * TON, _F(0), _F(-20), _F(-30))           # supply warmer than return
+
+
+def test_return_setpoint_cannot_push_sst_past_zero_load():
+    """Throttling stops at zero coil load (SST = return air); it never turns the coil into a heater."""
+    c, r = _coil(), RefSystem(32 * TON, _F(-30), "NH3")
+    held = solve_balance(-4.0, 0.9, c.design_C_air, c, r, T_return_min=-30.0)
+    assert held.SST <= held.T_return + 1e-9 and held.Q >= -1e-6
