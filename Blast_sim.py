@@ -326,6 +326,7 @@ def coil_ref_inputs(p: str, c) -> dict:
             driver = st.segmented_control("Set by", DRIVERS, default="Return air",
                                           key=f"w::{p}coil_driver", help=HELP["driver"])
             driver = driver or "Return air"
+            # same order either way (return air, then airflow); only which one is greyed out changes
             if driver == "Return air":
                 Tr = qw("number", "Design return air temp", p + "coil_Tr", "temp", c.coil_T_return_design,
                         -60, 10, help=HELP["coil_Tr"])
@@ -337,13 +338,15 @@ def coil_ref_inputs(p: str, c) -> dict:
                 _forget_widget(p + "coil_flow")
                 _readonly("Airflow", "flow", airflow, HELP["calc_flow"] + " " + HELP["coil_flow"], pfx=p)
             else:
+                tr_slot = st.empty()                    # filled once airflow is known
                 airflow = qw("number", "Airflow", p + "coil_flow", "flow", c.airflow, 0.5, 200,
                              help=HELP["coil_flow"])
                 Tr = coil_return(coil_Q, coil_Ts, airflow)
                 ss[f"si::{p}coil_Tr"] = Tr
                 _forget_widget(p + "coil_Tr")
-                _readonly("Design return air temp", "temp", Tr, HELP["calc_Tr"] + " " + HELP["coil_Tr"],
-                          pfx=p)
+                with tr_slot.container():
+                    _readonly("Design return air temp", "temp", Tr, HELP["calc_Tr"] + " " + HELP["coil_Tr"],
+                              pfx=p)
             fan_spec = qw("number", "Fan power", p + "fan_spec", "fanspec", c.fan_specific_power, 0, 10_000,
                           si_scale=1e-3, help=HELP["fan_spec"])
             st.caption(f"Fans: {cv('power', fan_spec * airflow / 1000):,.1f} {ul('power')} of heat "
