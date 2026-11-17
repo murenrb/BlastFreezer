@@ -35,7 +35,7 @@ from blastfreezer.pallet import air_density
 from blastfreezer.refrigeration import Coil, RefSystem, design_return_balance
 from blastfreezer.foods import CUSTOM, DEFAULT_FOOD, FOODS, product_kwargs
 from blastfreezer.viz import (GUI_FACES, air_temperature_figure, cell_figure, cooling_figure,
-                              product_temperature_figure)
+                              product_temperature_figure, ref_temperature_figure)
 
 FLOW_LABEL = {"left": "Left → right", "right": "Right → left", "bottom": "Bottom → top",
               "top": "Top → bottom"}
@@ -598,9 +598,9 @@ with right:
                            "(Model tab → Max simulated time).")
 
 st.divider()
-t_prod, t_air, t_cool = st.tabs(["Product temperature", "Air temperature", "Cooling"])
+t_prod, t_air, t_ref, t_cool = st.tabs(["Product temperature", "Air temperature", "Ref temperature", "Cooling"])
 if res is None:
-    for t in (t_prod, t_air, t_cool):
+    for t in (t_prod, t_air, t_ref, t_cool):
         t.info("Run the solver to see the time series.")
 else:
     off, on = res["off"], res["on"]
@@ -612,6 +612,10 @@ else:
         st.plotly_chart(air_temperature_figure(off, on, cv, ul), width="stretch")
         st.caption("Dashed = without boost, solid = with boost. Supply = mixed air leaving the coils, after fan "
                    "heat; return = air leaving the pallets, entering the coils.")
+    with t_ref:
+        st.plotly_chart(ref_temperature_figure(off, on, cv, ul), width="stretch")
+        st.caption("Dashed = without boost, solid = with boost. Saturated suction temperature of each coil; "
+                   "the boost SST ends when the boost shuts off.")
     with t_cool:
         st.plotly_chart(cooling_figure(off, on, cv, ul, design_kW=shown.cooling.ref_Q_design / 1000),
                         width="stretch")

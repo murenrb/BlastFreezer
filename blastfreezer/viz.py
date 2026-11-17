@@ -369,12 +369,21 @@ def product_temperature_figure(off, on, cv: Callable, ul: Callable, height: int 
 
 
 def air_temperature_figure(off, on, cv: Callable, ul: Callable, height: int = 400) -> go.Figure:
-    """Supply and return air, main SST, and boost SST (boost run only)."""
+    """Supply and return air."""
     fig = go.Figure()
     for res, boost in _runs(off, on):
         C = res.cell
         _add(fig, C.time_h, cv("temp", C.T_supply), "supply", "Supply air", boost)
         _add(fig, C.time_h, cv("temp", C.T_return), "return", "Return air", boost)
+    _finish(fig, ul("temp"), height)
+    return fig
+
+
+def ref_temperature_figure(off, on, cv: Callable, ul: Callable, height: int = 400) -> go.Figure:
+    """Main coil SST, and boost coil SST (boost run only)."""
+    fig = go.Figure()
+    for res, boost in _runs(off, on):
+        C = res.cell
         if C.SST.notna().any():
             _add(fig, C.time_h, cv("temp", C.SST), "SST", "SST main coil", boost, 1.5)
         if boost and "SST_boost" in C and C.SST_boost.notna().any():

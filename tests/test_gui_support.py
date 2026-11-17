@@ -8,7 +8,8 @@ from blastfreezer import units as U
 from blastfreezer.config import CELL_FACES
 from blastfreezer.foods import FOODS, ice_fraction, product_kwargs
 from blastfreezer.viz import (GUI_FACES, air_temperature_figure, cell_figure, cooling_bands, cooling_figure,
-                              extreme_positions, product_temperature_figure, series_position)
+                              extreme_positions, product_temperature_figure, ref_temperature_figure,
+                              series_position)
 
 cv = lambda q, v: U.to_disp(q, v, U.SI)
 ul = lambda q: U.unit(q, U.SI)
@@ -132,15 +133,20 @@ def test_time_series_figures_build():
     s.boost.off_mode, s.boost.off_time_h = "time", 2.0
     off, on = simulate(s), simulate(s, boost=True)
     prod, air = product_temperature_figure(off, on, cv, ul), air_temperature_figure(off, on, cv, ul)
+    ref = ref_temperature_figure(off, on, cv, ul)
     assert len(prod.data) == 2 + 2         # core, surface per run
-    assert len(air.data) == 3 + 4          # supply, return, SST; + boost SST on the boost run
+    assert len(air.data) == 2 + 2          # supply, return per run
+    assert len(ref.data) == 1 + 2          # main SST; + boost SST on the boost run
     assert all("warmest" in t.name for t in prod.data)
-    for t in prod.data + air.data:         # dashed without boost, solid with
+    assert all(t.name.startswith("SST") for t in ref.data)
+    lines = prod.data + air.data + ref.data
+    for t in lines:                        # dashed without boost, solid with
         assert t.line.dash == ("solid" if t.name.endswith("· boost") else "dash")
-    colors = {t.legendgroup: t.line.color for t in prod.data + air.data}
+    colors = {t.legendgroup: t.line.color for t in lines}
     assert len(set(colors.values())) == len(colors)          # one colour per quantity
     assert len(product_temperature_figure(off, None, cv, ul).data) == 2
-    assert len(air_temperature_figure(off, None, cv, ul).data) == 3
+    assert len(air_temperature_figure(off, None, cv, ul).data) == 2
+    assert len(ref_temperature_figure(off, None, cv, ul).data) == 1
 
     cool = cooling_figure(off, on, cv, ul, design_kW=100.0)
     stacked = [t for t in cool.data if t.stackgroup]

@@ -11,7 +11,7 @@ blastfreezer/
   config_file.py        Save / load the GUI inputs as a JSON configuration file
   units.py              SI <-> Imperial display conversions (model is SI internally)
   foods.py              Product property library (ASHRAE / proposal generator, Choi-Okos k and density)
-  viz.py                Plotly figures: cell view, product / air temperature and cooling time series
+  viz.py                Plotly figures: cell view, product / air / ref temperature and cooling time series
   cell.py               Cell of pallet positions; lanes of pallets in series; coil/ref balance per step
   refrigeration.py      Coil (UA from design point) and fixed-displacement refrigeration (CoolProp)
   geometry.py           Pallet -> 1-D representative body (plate / sphere / cylinder) + FV grid
@@ -43,8 +43,8 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 - Every solve runs twice, without and with the boost coil. The metrics show both cell freeze times
   and the time saved; the cell view toggles between the two runs (the boost coil is drawn black while
   it runs and greys out when it shuts off).
-- Bottom, three tabs. Product temperature: warmest pallet core and surface node. Air temperature:
-  supply and return air, main and boost SST. One colour per quantity; dashed = without boost,
+- Bottom, four tabs. Product temperature: warmest pallet core and surface node. Air temperature:
+  supply and return air. Ref temperature: main and boost coil SST. One colour per quantity; dashed = without boost,
   solid = with boost. Cooling: stacked areas for the boost run (fan heat, main coil, boost coil from
   bottom to top) adding up to the total coil load, with the no-boost total as a dashed line. Each
   coil's load includes its share of the fan heat, so the bands above the fan heat split the rest (the
