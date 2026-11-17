@@ -59,7 +59,7 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 - The packed load is homogenized: product + voids (Maxwell-Eucken), in series with internal
   package walls and the headspace air gap. For boxes, the outer wall is a surface resistance.
 - Bound water (share of the water that never freezes) is excluded from latent heat.
-- Air segregation (default 50 %): share of the void air inside the packages that surrounds the
+- Air segregation (default 75 %): share of the void air inside the packages that surrounds the
   product; the rest is mixed into it. Nested Maxwell-Eucken: product with the mixed-in air
   dispersed in it, then that core dispersed in the surrounding air. 0 % = all air mixed in
   (best case), 100 % = product pieces surrounded by air (worst case).

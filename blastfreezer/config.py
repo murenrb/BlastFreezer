@@ -24,7 +24,7 @@ class Product:
     name: str = _D["name"]
     water_fraction: float = _D["water_fraction"]     # total water, mass fraction of product [-]
     bound_water_fraction: float = 0.05               # fraction of that water that never freezes [-]
-    air_segregation: float = 0.5                     # share of the package's void air that surrounds the
+    air_segregation: float = 0.75                    # share of the package's void air that surrounds the
                                                      # product; the rest is mixed into it [-]
     cp_unfrozen: float = _D["cp_unfrozen"]           # J/kg-K
     cp_frozen: float = _D["cp_frozen"]               # J/kg-K

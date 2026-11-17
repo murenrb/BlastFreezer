@@ -24,7 +24,7 @@ def test_segregation_lowers_k_monotonically():
 
 def test_segregation_slows_freezing_and_defaults():
     s = Scenario()
-    assert s.product.name.startswith("Sausage") and s.product.air_segregation == 0.5
+    assert s.product.name.startswith("Sausage") and s.product.air_segregation == 0.75
     k = {}
     for seg in (0.0, 0.5, 1.0):
         s.product.air_segregation = seg
