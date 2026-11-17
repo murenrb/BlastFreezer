@@ -34,9 +34,12 @@ and T_r = a + b * T_s(T_r) has one root (the right side rises slower than T_r),
 found with brentq.
 
 Controls: a unit whose free SST is above its SST_max is held at SST_max and the
-coil gets what it needs. If the free return air would be colder than the
-return-air setpoint, return air is held at the setpoint and units are throttled
-(SST raised, down to zero load) in reverse order: the last unit (boost) first.
+coil gets what it needs. If the free (mixed) supply air would be colder than the
+supply-air setpoint, supply air is held at the setpoint, so return air follows
+the cell: T_r = a + b * T_set, and units are throttled (SST raised, down to zero
+load) in reverse order, the last unit (boost) first, until their mixed outlet is
+T_set. As the pallets cool, return air keeps falling toward the setpoint while
+SST rises.
 """
 
 from __future__ import annotations
@@ -155,7 +158,7 @@ class Balance:
     T_supply: float          # mixed air entering the pallets (coil outlets + fan heat)
     T_return: float          # air leaving the pallets = entering every coil
     Q: float                 # W, total coil load (= pallet load + fan heat)
-    limited: str = ""        # first unit: "" | "SST max" | "return setpoint" | "SST floor" | "SST ceiling"
+    limited: str = ""        # first unit: "" | "SST max" | "supply setpoint" | "SST floor" | "SST ceiling"
     T_coil_out: float = float("nan")   # first unit, before fan heat
     Q_fan: float = 0.0       # W, all units
     coils: tuple = ()        # CoilState per unit
@@ -190,7 +193,7 @@ class CoilUnit:
 
 
 def solve_parallel(a: float, b: float, units: list[CoilUnit], *,
-                   T_return_min: float | None = None) -> Balance:
+                   T_supply_min: float | None = None) -> Balance:
     """Close coils + refrigeration + load with cell return air T_r = a + b * T_supply."""
     C_tot = sum(u.C_air for u in units)
 
@@ -212,10 +215,10 @@ def solve_parallel(a: float, b: float, units: list[CoilUnit], *,
     st = states(T_r)
     SSTs, labels = [S for S, _ in st], [lim for _, lim in st]
 
-    if T_return_min is not None and b > 0.0 and T_r < T_return_min:
-        T_r = T_return_min
+    if T_supply_min is not None and T_mix(T_r, SSTs) < T_supply_min:
+        T_r = a + b * T_supply_min                        # supply held: return air follows the cell
         SSTs, labels = [S for S, _ in states(T_r)], [lim for _, lim in states(T_r)]
-        need = (T_r - a) / b - T_mix(T_r, SSTs)            # mixed supply must warm by this much
+        need = T_supply_min - T_mix(T_r, SSTs)            # > 0: mixed supply must warm by this much
         for i in reversed(range(len(units))):             # last unit (boost) throttles first
             if need <= 0.0:
                 break
@@ -225,9 +228,10 @@ def solve_parallel(a: float, b: float, units: list[CoilUnit], *,
                 continue
             take = min(need, room)
             SSTs[i] += take * C_tot / (u.C_air * u.eps)
-            labels[i] = "return setpoint"
+            labels[i] = "supply setpoint"
             need -= take
-        if need > 1e-9:                                   # everything unloaded: return air floats up
+        if need > 1e-9:                                   # everything unloaded (pallets colder than the
+                                                          # setpoint): supply floats, coils never heat
             D = sum(u.C_air * u.d for u in units) / C_tot
             T_r = (a + b * D) / (1.0 - b) if b < 1.0 else T_r
             SSTs = [T_r] * len(units)
@@ -245,9 +249,9 @@ def solve_parallel(a: float, b: float, units: list[CoilUnit], *,
 
 def solve_balance(a: float, b: float, C_air: float, coil: Coil, ref: RefSystem, *,
                   fan_W: float = 0.0, SST_max: float | None = None,
-                  T_return_min: float | None = None) -> Balance:
+                  T_supply_min: float | None = None) -> Balance:
     """Single coil unit: see solve_parallel. Fan heat is added to the air leaving the coil."""
-    return solve_parallel(a, b, [CoilUnit(coil, ref, C_air, fan_W, SST_max)], T_return_min=T_return_min)
+    return solve_parallel(a, b, [CoilUnit(coil, ref, C_air, fan_W, SST_max)], T_supply_min=T_supply_min)
 
 
 def design_return_balance(coil: Coil, ref: RefSystem, C_air: float) -> Balance:

@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 import pytest
 
 from blastfreezer import Scenario, simulate
@@ -79,22 +80,28 @@ def test_sst_max_caps_suction():
     assert capped.Q > free.Q                    # plant supplies more to hold suction down
 
 
-def test_return_setpoint_holds_return_air():
+def test_supply_setpoint_holds_supply_air():
     c, r = _coil(), RefSystem(32 * TON, _F(-30), "NH3")
     a, b = -4.0, 0.9                            # light load: free balance goes to about -61 C
-    free = solve_balance(a, b, c.design_C_air, c, r)
-    held = solve_balance(a, b, c.design_C_air, c, r, T_return_min=free.T_return + 2.0)
-    assert held.T_return == pytest.approx(free.T_return + 2.0)
-    assert held.SST > free.SST and held.limited == "return setpoint"
+    free = solve_balance(a, b, c.design_C_air, c, r, fan_W=5000.0)
+    T_set = free.T_supply + 2.0
+    held = solve_balance(a, b, c.design_C_air, c, r, fan_W=5000.0, T_supply_min=T_set)
+    assert held.T_supply == pytest.approx(T_set)
+    assert held.T_return == pytest.approx(a + b * T_set)          # return air follows the cell
+    assert held.SST > free.SST and held.limited == "supply setpoint"
     assert held.Q == pytest.approx(c.design_C_air * (held.T_return - held.T_coil_out))
+    assert solve_balance(a, b, c.design_C_air, c, r, fan_W=5000.0, T_supply_min=free.T_supply - 1.0).SST == \
+        pytest.approx(free.SST)                                    # setpoint not reached: no effect
 
 
 def test_default_run_respects_controls():
     s = Scenario()
     C = simulate(s).cell
-    assert C.T_return.min() >= s.cooling.T_return_setpoint - 1e-6
+    assert C.T_supply.min() >= s.cooling.T_supply_setpoint - 1e-6
     assert C.SST.max() <= s.cooling.SST_max + 1e-6
-    assert (C.limit == "return setpoint").any()
+    held = C[C.limit == "supply setpoint"]
+    assert len(held) and np.allclose(held.T_supply, s.cooling.T_supply_setpoint)
+    assert held.SST.is_monotonic_increasing and held.T_return.is_monotonic_decreasing
 
 
 def test_more_refrigeration_freezes_faster():
@@ -117,8 +124,9 @@ def test_invalid_coil_design_rejected():
         Coil(32 * TON, _F(0), _F(-20), _F(-30))           # supply warmer than return
 
 
-def test_return_setpoint_cannot_push_sst_past_zero_load():
+def test_supply_setpoint_cannot_push_sst_past_zero_load():
     """Throttling stops at zero coil load (SST = return air); it never turns the coil into a heater."""
     c, r = _coil(), RefSystem(32 * TON, _F(-30), "NH3")
-    held = solve_balance(-4.0, 0.9, c.design_C_air, c, r, T_return_min=-30.0)
+    held = solve_balance(-4.0, 0.9, c.design_C_air, c, r, T_supply_min=-30.0)   # pallets near -40 C
     assert held.SST <= held.T_return + 1e-9 and held.Q >= -1e-6
+    assert held.T_supply < -30.0

@@ -9,7 +9,7 @@ Units: SI throughout (m, kg, s, W, J), temperatures in degC.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 from .foods import DEFAULT_FOOD, product_kwargs
 
@@ -134,7 +134,7 @@ class Cooling:
     ref_SST_design: float = _F(-30.0)      # degC
     refrigerant: str = "NH3"
     SST_max: float = _F(-20.0)             # degC, plant holds suction at or below this
-    T_return_setpoint: float = _F(-30.0)   # degC, return air is not allowed below this (frost)
+    T_supply_setpoint: float = _F(-30.0)   # degC, supply air (mixed, after fans) is not allowed below this
     fixed_supply_T: float | None = None    # degC; if set, bypasses the coil (verification/comparison)
 
     @property
@@ -159,7 +159,7 @@ class Boost:
     """Boost coil: a second coil with its own fans and refrigeration system, in parallel with
     the main coil. Return air splits between the coils and their outlets mix into the supply.
 
-    Same inputs as the main coil (defaults copy it). The return-air setpoint on Cooling applies
+    Same inputs as the main coil (defaults copy it). The supply-air setpoint on Cooling applies
     to both; the boost is throttled first. It switches off (fans and refrigeration, so its
     airflow stops) per off_mode: "never", "time" (at off_time_h), or "core" (when the warmest
     pallet core reaches off_core_T). Once off it stays off.
@@ -234,13 +234,17 @@ class Scenario:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Scenario":
+        """Unknown keys (e.g. from an older version) are ignored; missing ones take defaults."""
+        def make(kind, part):
+            known = {f.name for f in fields(kind)}
+            return kind(**{k: v for k, v in d.get(part, {}).items() if k in known})
         return cls(
-            product=Product(**d.get("product", {})),
-            packaging=Packaging(**d.get("packaging", {})),
-            load=PalletLoad(**d.get("load", {})),
-            air=Air(**d.get("air", {})),
-            cell=Cell(**d.get("cell", {})),
-            sim=SimSettings(**d.get("sim", {})),
-            cooling=Cooling(**d.get("cooling", {})),
-            boost=Boost(**d.get("boost", {})),
+            product=make(Product, "product"),
+            packaging=make(Packaging, "packaging"),
+            load=make(PalletLoad, "load"),
+            air=make(Air, "air"),
+            cell=make(Cell, "cell"),
+            sim=make(SimSettings, "sim"),
+            cooling=make(Cooling, "cooling"),
+            boost=make(Boost, "boost"),
         )

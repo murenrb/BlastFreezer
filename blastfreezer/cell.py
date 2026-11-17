@@ -210,7 +210,7 @@ class Cell:
             Tr = a + b * Ts
             return Balance(float("nan"), Ts, Tr, self.C_air * (Tr - Ts), "fixed supply", Ts, 0.0)
         units = [self.main_unit] + ([self.boost_unit] if self.boost_on else [])
-        return solve_parallel(a, b, units, T_return_min=self.s.cooling.T_return_setpoint)
+        return solve_parallel(a, b, units, T_supply_min=self.s.cooling.T_supply_setpoint)
 
     @property
     def pallets(self):

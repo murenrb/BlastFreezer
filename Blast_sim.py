@@ -298,10 +298,11 @@ HELP = {
         "SST is held here and the coil gets whatever capacity it needs. Set it equal to the design SST "
         "for a stiff central plant, or high to model a dedicated, constrained system."),
     "T_set": (
-        "Lowest allowed return air temperature; colder than this, frost on the coil becomes too "
-        "dendritic. Once return air reaches the setpoint, refrigeration capacity is reduced (SST rises, "
-        "like an evaporator pressure regulator) to hold it there while the pallets finish freezing. "
-        "Airflow stays fixed. With the boost coil running, the boost is throttled first, then the main coil."),
+        "Lowest allowed supply air temperature (mixed air entering the pallets, after fan heat). The "
+        "system pulls down until supply air reaches the setpoint; from then on refrigeration capacity is "
+        "reduced (SST rises, like an evaporator pressure regulator) to hold supply air there, while the "
+        "return air keeps falling toward it as the pallets finish freezing. Airflow stays fixed. With the "
+        "boost coil running, the boost is throttled first, then the main coil."),
     "boost_off": (
         "When the boost coil switches off: never, at a set blasting time, or once the warmest pallet "
         "(the last to freeze) reaches a core temperature. Off means its fans and refrigeration stop, so "
@@ -389,11 +390,11 @@ def cooling_tab() -> Cooling:
         with c1:
             SST_max = qw("number", "Max SST", "SST_max", "temp", c.SST_max, -70, 10, help=HELP["SST_max"])
         with c2:
-            T_set = qw("number", "Return air setpoint", "T_set", "temp", c.T_return_setpoint, -70, 0,
+            T_set = qw("number", "Supply air setpoint", "T_sup_set", "temp", c.T_supply_setpoint, -70, 0,
                        help=HELP["T_set"])
     design_caption(v)
     return Cooling(**{k: x for k, x in v.items() if not k.startswith("_")}, SST_max=SST_max,
-                   T_return_setpoint=T_set)
+                   T_supply_setpoint=T_set)
 
 
 BOOST_OFF_LABEL = {"never": "Never", "time": "At a set time", "core": "When the warmest pallet core reaches"}
@@ -417,8 +418,8 @@ def boost_tab() -> Boost:
                           step=0.5, format="%.1f") if mode == "time" else ss.get("si::b_off_time", b.off_time_h)
             off_T = qw("slider", "Shut off when the warmest core reaches", "b_off_T", "temp", b.off_core_T,
                        -40, 10) if mode == "core" else ss.get("si::b_off_T", b.off_core_T)
-        st.caption("The return air setpoint (Cooling tab → Controls) applies to both coils; the boost is "
-                   "throttled first, then the main coil.")
+        st.caption("The supply air setpoint (Cooling tab → Controls) applies to the mixed supply air; "
+                   "the boost is throttled first, then the main coil.")
     when = {"never": "runs for the whole blast", "time": f"shuts off at {off_time:.1f} h",
             "core": f"shuts off when the warmest pallet core reaches {cv('temp', off_T):.1f} {ul('temp')}"}[mode]
     st.caption(f"**Boost {when}.**")

@@ -46,25 +46,25 @@ def test_single_unit_matches_legacy_wrapper():
     assert (w.SST, w.T_supply, w.Q) == pytest.approx((p.SST, p.T_supply, p.Q))
 
 
-def test_return_setpoint_throttles_boost_first():
-    a, b = -4.0, 0.9                                       # light load: free return air ~ -60 C
+def test_supply_setpoint_throttles_boost_first():
+    a, b = -4.0, 0.9                                       # light load: free air ~ -60 C
     units = [_unit(), _unit(name="boost")]
     free = solve_parallel(a, b, units)
-    T_set = free.T_return + 1.0                            # small correction: boost alone can absorb it
-    held = solve_parallel(a, b, units, T_return_min=T_set)
+    T_set = free.T_supply + 1.0                            # small correction: boost alone can absorb it
+    held = solve_parallel(a, b, units, T_supply_min=T_set)
     main, boost = held.coils
-    assert held.T_return == pytest.approx(T_set)
-    assert boost.limited == "return setpoint" and main.limited != "return setpoint"
+    assert held.T_supply == pytest.approx(T_set) and held.T_return == pytest.approx(a + b * T_set)
+    assert boost.limited == "supply setpoint" and main.limited != "supply setpoint"
     assert boost.SST > main.SST                            # boost unloaded, main still at its free SST
-    held2 = solve_parallel(a, b, units, T_return_min=-40.0)  # big correction: boost fully off, then main
+    held2 = solve_parallel(a, b, units, T_supply_min=-42.0)  # big correction: boost fully off, then main
     assert held2.coils[1].Q == pytest.approx(0.0, abs=1e-6)
-    assert held2.coils[0].limited == "return setpoint" and held2.coils[0].Q > 0
-    assert held2.T_return == pytest.approx(-40.0)
-    # pallets here sit near -40 C: a -30 C setpoint can't be held even with both coils unloaded,
-    # so return air floats (coils never turn into heaters)
-    held3 = solve_parallel(a, b, units, T_return_min=-30.0)
+    assert held2.coils[0].limited == "supply setpoint" and held2.coils[0].Q > 0
+    assert held2.T_supply == pytest.approx(-42.0)
+    # pallets here sit near -40 C: a -30 C supply can't be held even with both coils unloaded,
+    # so the air floats (coils never turn into heaters)
+    held3 = solve_parallel(a, b, units, T_supply_min=-30.0)
     assert all(c.Q == pytest.approx(0.0, abs=1e-6) for c in held3.coils)
-    assert held3.T_return < -30.0
+    assert held3.T_supply < -30.0
 
 
 def test_boost_off_at_time_drops_airflow():
@@ -98,7 +98,7 @@ def test_boost_speeds_up_the_blast_and_conserves_energy():
     t_off, t_on = summarize(off, s)["cell_freeze_time_h"], summarize(on, s)["cell_freeze_time_h"]
     assert t_on < t_off
     assert on.info["energy_balance_error"] < 1e-10
-    assert np.nanmax(on.cell.T_return) and on.cell.T_return.min() >= s.cooling.T_return_setpoint - 1e-6
+    assert on.cell.T_supply.min() >= s.cooling.T_supply_setpoint - 1e-6
     assert off.info["boost_off_h"] is None and not off.cell.boost_on.any()
 
 
