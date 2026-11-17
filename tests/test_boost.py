@@ -107,3 +107,19 @@ def test_stable_step_follows_airflow():
     c0, c1 = Cell(s), Cell(s, boost=True)
     assert c1.dt_stable <= c0.dt_stable
     assert c1.lanes[0].m_dot == pytest.approx(c0.lanes[0].m_dot * (1 + c1.m_boost / c1.m_main))
+
+
+def test_average_and_peak_cooling():
+    s = Scenario()
+    s.boost.off_mode, s.boost.off_time_h = "time", 4.0
+    s.sim.t_max_hours = 8.0                                # stop early: averages cover whatever ran
+    r = simulate(s, boost=True)
+    sm, C = summarize(r, s), r.cell
+    t = C.time_h.to_numpy()
+    E_boost = np.trapezoid(C.Q_boost_kW.to_numpy(), t)
+    assert sm["avg_boost_kW"] == pytest.approx(E_boost / t[-1])
+    assert sm["avg_coil_kW"] == pytest.approx(sm["avg_main_kW"] + sm["avg_boost_kW"])
+    assert 0 < sm["avg_boost_kW"] < sm["peak_boost_kW"] <= sm["peak_coil_kW"]
+    # boost ran 4 of 8 h, so its average is well under its average while running
+    running = C[C.time_h <= 4.0]
+    assert sm["avg_boost_kW"] < 0.6 * running.Q_boost_kW.mean()

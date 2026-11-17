@@ -592,14 +592,25 @@ with right:
     else:
         s_off, s_on = summarize(res["off"], shown), summarize(res["on"], shown)
         t_off, t_on = s_off["cell_freeze_time_h"], s_on["cell_freeze_time_h"]
-        m = st.columns(4)
+        m = st.columns(3)
         m[0].metric("Cell frozen with boost", fmt_h(t_on),
                     delta=None if None in (t_on, t_off) else f"{t_on - t_off:+.1f} h vs no boost",
                     delta_color="inverse", help="Warmest pallet core reaches the target.")
         m[1].metric("Cell frozen without boost", fmt_h(t_off))
-        m[2].metric("Peak coil load (with boost)", f"{cv('power', s_on['peak_coil_kW']):,.0f} {ul('power')}",
-                    help="Main + boost coil load, including fan heat.")
-        m[3].metric("Boost switched off", "Never" if s_on["boost_off_h"] is None else fmt_h(s_on["boost_off_h"]))
+        m[2].metric("Boost switched off", "Never" if s_on["boost_off_h"] is None else fmt_h(s_on["boost_off_h"]))
+        fmt_P = lambda kw: f"{cv('power', kw):,.1f} {ul('power')}"
+        avg_help = ("Time average over the whole blast with boost, from load-in until the warmest pallet "
+                    "reaches the target: energy ÷ blast time. Coil load, including that coil's fan heat.")
+        q = st.columns(4)
+        q[0].metric("Boost cooling, average", fmt_P(s_on["avg_boost_kW"]),
+                    help=avg_help + " Counts the time after the boost shuts off as zero.")
+        q[1].metric("Boost cooling, peak", fmt_P(s_on["peak_boost_kW"]), help="Highest boost coil load.")
+        q[2].metric("Total cooling, average", fmt_P(s_on["avg_coil_kW"]),
+                    help=avg_help.replace("Coil load, including that coil's", "Main + boost coil load, including")
+                    + f" Without boost: {fmt_P(s_off['avg_coil_kW'])}.")
+        q[3].metric("Total cooling, peak", fmt_P(s_on["peak_coil_kW"]),
+                    help=f"Highest main + boost coil load, including fan heat. Without boost: "
+                         f"{fmt_P(s_off['peak_coil_kW'])}.")
         for name, sm in (("without", s_off), ("with", s_on)):
             if not sm["all_frozen"]:
                 st.warning(f"Run {name} boost: not every pallet reached the target within {sm['sim_end_h']:.0f} h "

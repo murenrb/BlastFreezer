@@ -125,9 +125,18 @@ def _cooling_info(cell: Cell, s: Scenario) -> dict:
     }
 
 
+def _average_kW(C: pd.DataFrame, col: str) -> float:
+    """Time average over the whole run (load-in to the last record), trapezoidal in time."""
+    t = C["time_h"].to_numpy(float)
+    return float(np.trapezoid(C[col].to_numpy(float), t) / t[-1]) if t[-1] > 0 else float(C[col].iloc[0])
+
+
 def summarize(r: Result, s: Scenario) -> dict:
+    """Freeze times and loads. The run stops when the warmest pallet reaches the target, so averages
+    cover the whole blast; boost averages include the time after it shuts off (at zero)."""
     ft = r.freeze_times_h
     done = [t for t in ft if t is not None]
+    C = r.cell
     return {
         "all_frozen": len(done) == len(ft),
         "cell_freeze_time_h": max(done) if len(done) == len(ft) else None,
@@ -139,6 +148,10 @@ def summarize(r: Result, s: Scenario) -> dict:
         "sim_end_h": float(r.cell["time_h"].iloc[-1]),
         "boost_off_h": r.info.get("boost_off_h"),
         "peak_boost_kW": float(r.cell["Q_boost_kW"].max()),
+        "peak_main_kW": float(C["Q_main_kW"].max()),
+        "avg_coil_kW": _average_kW(C, "Q_coil_kW"),
+        "avg_main_kW": _average_kW(C, "Q_main_kW"),
+        "avg_boost_kW": _average_kW(C, "Q_boost_kW"),
     }
 
 
