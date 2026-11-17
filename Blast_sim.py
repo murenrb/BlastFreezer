@@ -34,7 +34,8 @@ from blastfreezer.config import REFRIGERANT_CHOICES, Boost, Cooling, coil_airflo
 from blastfreezer.pallet import air_density
 from blastfreezer.refrigeration import Coil, RefSystem, design_return_balance
 from blastfreezer.foods import CUSTOM, DEFAULT_FOOD, FOODS, product_kwargs
-from blastfreezer.viz import GUI_FACES, cell_figure, power_figure, temperature_figure
+from blastfreezer.viz import (GUI_FACES, air_temperature_figure, cell_figure, cooling_figure,
+                              product_temperature_figure)
 
 FLOW_LABEL = {"left": "Left → right", "right": "Right → left", "bottom": "Bottom → top",
               "top": "Top → bottom"}
@@ -593,21 +594,27 @@ with right:
                            "(Model tab → Max simulated time).")
 
 st.divider()
-t_temp, t_pow = st.tabs(["Temperature", "Power"])
+t_prod, t_air, t_cool = st.tabs(["Product temperature", "Air temperature", "Cooling"])
 if res is None:
-    for t in (t_temp, t_pow):
+    for t in (t_prod, t_air, t_cool):
         t.info("Run the solver to see the time series.")
 else:
     off, on = res["off"], res["on"]
-    with t_temp:
-        st.plotly_chart(temperature_figure(off, on, cv, ul), width="stretch")
+    with t_prod:
+        st.plotly_chart(product_temperature_figure(off, on, cv, ul), width="stretch")
         st.caption("Dashed = without boost, solid = with boost. Warmest pallet = last to reach the target; "
                    "surface node = its outermost finite volume.")
-    with t_pow:
-        st.plotly_chart(power_figure(off, on, cv, ul, design_kW=shown.cooling.ref_Q_design / 1000),
+    with t_air:
+        st.plotly_chart(air_temperature_figure(off, on, cv, ul), width="stretch")
+        st.caption("Dashed = without boost, solid = with boost. Supply = mixed air leaving the coils, after fan "
+                   "heat; return = air leaving the pallets, entering the coils.")
+    with t_cool:
+        st.plotly_chart(cooling_figure(off, on, cv, ul, design_kW=shown.cooling.ref_Q_design / 1000),
                         width="stretch")
-        st.caption("Dashed = without boost, solid = with boost. Cooling power = all coil load = pallet load + "
-                   "fan heat; fan power is fully added to the air.")
+        st.caption("Areas: with boost, stacked to the total coil load (refrigeration load). Fan heat at the "
+                   "bottom; the rest (the pallet load) split between the main and boost coils in proportion "
+                   "to their coil loads. Dashed line: total coil load without boost. Raw per-coil loads are in "
+                   "the cell history CSV.")
 
     with st.expander("Model details & data"):
         info = on.info

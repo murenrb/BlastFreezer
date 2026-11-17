@@ -334,7 +334,7 @@ def extreme_positions(freeze_times_h: Sequence, final_T_core: Sequence[float]) -
 # one colour per quantity; dashed = without boost, solid = with boost
 SERIES_COLORS = {"core": "#d7263d", "surface": "#f28e2b", "supply": "#1f77b4", "return": "#17becf",
                  "SST": "#2ca02c", "SST_boost": ACCENT, "coil": "#1f77b4", "boost_coil": ACCENT,
-                 "pallet": "#d7263d", "fan": "#f28e2b"}
+                 "pallet": "#d7263d", "fan": "#f28e2b", "total": "#2b3a4a"}
 RUN_DASH = {False: "dash", True: "solid"}
 RUN_NAME = {False: "no boost", True: "boost"}
 
@@ -355,19 +355,24 @@ def _add(fig, x, y, key, label, boost, width=2.0):
                              line=dict(color=SERIES_COLORS[key], dash=RUN_DASH[boost], width=width)))
 
 
-def temperature_figure(off, on, cv: Callable, ul: Callable, height: int = 440) -> go.Figure:
-    """Warmest pallet core and surface node, supply and return air, SSTs.
-
-    off / on: results without and with the boost coil (either may be None).
-    """
+def product_temperature_figure(off, on, cv: Callable, ul: Callable, height: int = 400) -> go.Figure:
+    """Warmest pallet core and surface node. off / on: results without and with boost (either may be None)."""
     fig = go.Figure()
     for res, boost in _runs(off, on):
         pos = warmest_position(res)
         g = res.pallets[res.pallets.position == pos]
         prof = res.profiles[pos]
-        C = res.cell
         _add(fig, g.time_h, cv("temp", g.T_core), "core", f"Core, warmest pallet (P{pos})", boost, 2.5)
         _add(fig, prof.index, cv("temp", prof.iloc[:, -1].values), "surface", "Surface node, warmest pallet", boost)
+    _finish(fig, ul("temp"), height)
+    return fig
+
+
+def air_temperature_figure(off, on, cv: Callable, ul: Callable, height: int = 400) -> go.Figure:
+    """Supply and return air, main SST, and boost SST (boost run only)."""
+    fig = go.Figure()
+    for res, boost in _runs(off, on):
+        C = res.cell
         _add(fig, C.time_h, cv("temp", C.T_supply), "supply", "Supply air", boost)
         _add(fig, C.time_h, cv("temp", C.T_return), "return", "Return air", boost)
         if C.SST.notna().any():
@@ -378,22 +383,43 @@ def temperature_figure(off, on, cv: Callable, ul: Callable, height: int = 440) -
     return fig
 
 
-def power_figure(off, on, cv: Callable, ul: Callable, height: int = 440,
-                 design_kW: float | None = None) -> go.Figure:
-    """Total coil load, boost coil load, pallet load and fan power, without (dashed) and with boost."""
+def cooling_bands(C) -> dict:
+    """Stacked cooling bands [kW] that add up to the total coil load: fan heat, then the rest (= pallet
+    load) split between the main and boost coils in proportion to their coil loads. Each coil's raw load
+    includes its share of the fan heat, so stacking raw loads on top of fan heat would count it twice."""
+    Q = C.Q_coil_kW.to_numpy(float)
+    fan = C.fan_kW.to_numpy(float)
+    net = np.clip(Q - fan, 0.0, None)
+    share = np.divide(C.Q_boost_kW.to_numpy(float), Q, out=np.zeros_like(Q), where=Q > 0)
+    return {"fan": fan, "main": net * (1.0 - share), "boost": net * share}
+
+
+def cooling_figure(off, on, cv: Callable, ul: Callable, height: int = 400,
+                   design_kW: float | None = None) -> go.Figure:
+    """Stacked areas for the boost run (fan heat, main coil, boost coil, bottom to top); the run
+    without boost as a dashed total-coil-load line."""
     fig = go.Figure()
-    for res, boost in _runs(off, on):
-        C = res.cell
-        _add(fig, C.time_h, cv("power", C.Q_coil_kW), "coil", "Cooling power, all coils", boost, 2.5)
-        if boost and C.boost_on.any():
-            _add(fig, C.time_h, cv("power", C.Q_boost_kW), "boost_coil", "Boost coil load", boost, 1.5)
-        _add(fig, C.time_h, cv("power", C.Q_cell_kW), "pallet", "Pallet load", boost, 1.5)
-        _add(fig, C.time_h, cv("power", C.fan_kW), "fan", "Fan power", boost, 1.5)
+    if on is not None:
+        C = on.cell
+        bands = cooling_bands(C)
+        for key, label, color in (("fan", "Fan heat", SERIES_COLORS["fan"]),
+                                  ("main", "Main coil", SERIES_COLORS["coil"]),
+                                  ("boost", "Boost coil", SERIES_COLORS["boost_coil"])):
+            fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", bands[key]), name=f"{label} · boost",
+                                     legendgroup=key, stackgroup="boost", mode="lines",
+                                     line=dict(color=color, width=0.5), fillcolor=_alpha(color, 0.55)))
+    if off is not None:
+        _add(fig, off.cell.time_h, cv("power", off.cell.Q_coil_kW), "total", "Total coil load", False, 2.0)
     if design_kW is not None:
         fig.add_hline(y=cv("power", design_kW), line_dash="dot", line_color="#888",
                       annotation_text="Main refrigeration design")
     _finish(fig, ul("power"), height)
     return fig
+
+
+def _alpha(hex_color: str, a: float) -> str:
+    h = hex_color.lstrip("#")
+    return f"rgba({int(h[0:2], 16)}, {int(h[2:4], 16)}, {int(h[4:6], 16)}, {a})"
 
 
 def _finish(fig, y_unit, height):

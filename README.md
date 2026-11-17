@@ -43,9 +43,13 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 - Every solve runs twice, without and with the boost coil. The metrics show both cell freeze times
   and the time saved; the cell view toggles between the two runs (the boost coil is drawn black while
   it runs and greys out when it shuts off).
-- Bottom: Temperature (warmest pallet core and surface node, supply and return air, main and boost
-  SST) and Power (all-coil load, boost coil load, pallet load, fans). One colour per quantity;
-  dashed = without boost, solid = with boost. All "frozen" decisions use the warmest pallet.
+- Bottom, three tabs. Product temperature: warmest pallet core and surface node. Air temperature:
+  supply and return air, main and boost SST. One colour per quantity; dashed = without boost,
+  solid = with boost. Cooling: stacked areas for the boost run (fan heat, main coil, boost coil from
+  bottom to top) adding up to the total coil load, with the no-boost total as a dashed line. Each
+  coil's load includes its share of the fan heat, so the bands above the fan heat split the rest (the
+  pallet load) between the coils in proportion to their loads. All "frozen" decisions use the
+  warmest pallet.
 
 ## Model
 

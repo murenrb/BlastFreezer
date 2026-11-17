@@ -7,8 +7,8 @@ from blastfreezer import Scenario, simulate
 from blastfreezer import units as U
 from blastfreezer.config import CELL_FACES
 from blastfreezer.foods import FOODS, ice_fraction, product_kwargs
-from blastfreezer.viz import (GUI_FACES, cell_figure, extreme_positions, power_figure, series_position,
-                              temperature_figure)
+from blastfreezer.viz import (GUI_FACES, air_temperature_figure, cell_figure, cooling_bands, cooling_figure,
+                              extreme_positions, product_temperature_figure, series_position)
 
 cv = lambda q, v: U.to_disp(q, v, U.SI)
 ul = lambda q: U.unit(q, U.SI)
@@ -131,14 +131,31 @@ def test_time_series_figures_build():
     s.cell.inlet_face = "bottom"          # 3 pallets in series
     s.boost.off_mode, s.boost.off_time_h = "time", 2.0
     off, on = simulate(s), simulate(s, boost=True)
-    fig = temperature_figure(off, on, cv, ul)
-    names = [t.name for t in fig.data]
-    assert len(fig.data) == 5 + 6          # core, surface, supply, return, SST; + boost SST
-    assert all("warmest" in n for n in names if n.startswith(("Core", "Surface")))
-    assert not any("oldest" in n for n in names)
-    for t in fig.data:                     # dashed without boost, solid with
+    prod, air = product_temperature_figure(off, on, cv, ul), air_temperature_figure(off, on, cv, ul)
+    assert len(prod.data) == 2 + 2         # core, surface per run
+    assert len(air.data) == 3 + 4          # supply, return, SST; + boost SST on the boost run
+    assert all("warmest" in t.name for t in prod.data)
+    for t in prod.data + air.data:         # dashed without boost, solid with
         assert t.line.dash == ("solid" if t.name.endswith("· boost") else "dash")
-    colors = {t.legendgroup: t.line.color for t in fig.data}
+    colors = {t.legendgroup: t.line.color for t in prod.data + air.data}
     assert len(set(colors.values())) == len(colors)          # one colour per quantity
-    assert len(power_figure(off, on, cv, ul).data) == 3 + 4
-    assert len(temperature_figure(off, None, cv, ul).data) == 5
+    assert len(product_temperature_figure(off, None, cv, ul).data) == 2
+    assert len(air_temperature_figure(off, None, cv, ul).data) == 3
+
+    cool = cooling_figure(off, on, cv, ul, design_kW=100.0)
+    stacked = [t for t in cool.data if t.stackgroup]
+    assert [t.legendgroup for t in stacked] == ["fan", "main", "boost"]       # bottom to top
+    assert [t.line.dash for t in cool.data if not t.stackgroup] == ["dash"]   # total without boost
+
+
+def test_cooling_bands_stack_to_total_load():
+    s = Scenario()                         # full default cell: a tiny cell throttles the boost to zero
+    s.sim.t_max_hours = 4.0
+    s.boost.off_mode, s.boost.off_time_h = "time", 2.0
+    C = simulate(s, boost=True).cell
+    b = cooling_bands(C)
+    assert np.allclose(b["fan"] + b["main"] + b["boost"], C.Q_coil_kW)
+    assert all((v >= 0).all() for v in b.values())
+    after = (C.time_h > 2.0).to_numpy()
+    assert after.any() and (b["boost"][after] == 0).all()                    # boost off: band gone
+    assert (b["boost"][~after][1:] > 0).all()
