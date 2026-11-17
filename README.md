@@ -11,7 +11,7 @@ blastfreezer/
   config_file.py        Save / load the GUI inputs as a JSON configuration file
   units.py              SI <-> Imperial display conversions (model is SI internally)
   foods.py              Product property library (ASHRAE / proposal generator, Choi-Okos k and density)
-  viz.py                Plotly figures: cell view, temperature and power time series
+  viz.py                Plotly figures: cell view, product / air temperature and cooling time series
   cell.py               Cell of pallet positions; lanes of pallets in series; coil/ref balance per step
   refrigeration.py      Coil (UA from design point) and fixed-displacement refrigeration (CoolProp)
   geometry.py           Pallet -> 1-D representative body (plate / sphere / cylinder) + FV grid
