@@ -24,7 +24,7 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 ## GUI
 
 - Upper left: inputs in tabs (Pallet, Cell, Cooling, Model, Boost) and **Run solver**. Detailed
-  inputs sit in collapsible sections: Product details (properties, bound water), Packaging details
+  inputs sit in collapsible sections: Product details (properties, bound water, air segregation), Packaging details
   (package height, spacers, packaging walls), and on the Cooling tab Coil, Refrigeration system and
   Controls.
 - Package height is picked from the pallet height divided into 1 to 20 whole layers. With spacers on,
@@ -59,6 +59,10 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 - The packed load is homogenized: product + voids (Maxwell-Eucken), in series with internal
   package walls and the headspace air gap. For boxes, the outer wall is a surface resistance.
 - Bound water (share of the water that never freezes) is excluded from latent heat.
+- Air segregation (default 50 %): share of the void air inside the packages that surrounds the
+  product; the rest is mixed into it. Nested Maxwell-Eucken: product with the mixed-in air
+  dispersed in it, then that core dispersed in the surrounding air. 0 % = all air mixed in
+  (best case), 100 % = product pieces surrounded by air (worst case).
 - Isothermal enthalpy method on a fixed grid, explicit Euler; the freezing front comes from the
   frozen volume.
 - Air side uses epsilon-NTU with the airflow through the pallet; air-out temperature is reported.

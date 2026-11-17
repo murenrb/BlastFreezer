@@ -166,7 +166,13 @@ def pallet_tab() -> tuple[Product, Packaging, PalletLoad, float, float]:
                 )
             bound = qw("slider", "Bound (unfreezable) water", "xb", None, D.product.bound_water_fraction, 0, 0.3,
                        si_scale=100, unit_label="% of water", step=1.0, format="%.0f")
-        product = Product(bound_water_fraction=bound, **props)
+            seg = qw("slider", "Air around the product (segregated)", "xseg", None, D.product.air_segregation,
+                     0, 1, si_scale=100, unit_label="% of void air", step=5.0, format="%.0f",
+                     help="Share of the air inside the packages that surrounds the product rather than being "
+                          "mixed into it. 0 %: air pockets dispersed in continuous product (best case for "
+                          "conduction). 100 %: product pieces fully surrounded by air (worst case). Air "
+                          "around the product cuts the packed load's conductivity, especially once frozen.")
+        product = Product(bound_water_fraction=bound, air_segregation=seg, **props)
 
         st.markdown("**Packaging**")
         kind = st.selectbox("Packaging", list(PACKAGING_PRESETS), key="w::pkg", label_visibility="collapsed")

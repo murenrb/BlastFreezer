@@ -5,8 +5,12 @@ built from three parts in series along the heat-flow path:
 
   1. Package walls (cardboard / film): 2 walls per package height
   2. Headspace air gap: 1 gap per package height
-  3. Package contents: product with air voids, via Maxwell-Eucken
-     (product continuous, air dispersed)
+  3. Package contents: product with air voids. A share of the void air
+     (Product.air_segregation) surrounds the product; the rest is mixed into
+     it. Nested Maxwell-Eucken: product with the mixed-in air dispersed in it
+     (product continuous), then that core dispersed in the surrounding air
+     (air continuous). 0 = all air mixed in (best case), 1 = product pieces
+     fully surrounded by air (worst realistic case).
 
 For boxes (`surface_wall`), the outermost wall on the heat-flow path is pulled
 out of the smeared material and applied as a surface resistance t/k_wall in
@@ -90,6 +94,15 @@ def maxwell_eucken(k_cont: float, k_disp: float, phi_disp: float) -> float:
     return k_cont * num / den
 
 
+def contents_k(k_prod: float, k_air: float, void: float, segregation: float) -> float:
+    """Conductivity of package contents: product + void air (volume fraction `void`), with a share
+    `segregation` of that air around the product and the rest mixed into it."""
+    v_out = segregation * void                # air around the product
+    core = 1.0 - v_out                        # product + mixed-in air
+    k_core = maxwell_eucken(k_prod, k_air, (void - v_out) / core) if core > 0 else k_air
+    return maxwell_eucken(k_air, k_core, core) if v_out > 0 else k_core
+
+
 def build_material(product: Product, pkg: Packaging, mass: float, envelope_volume: float,
                    path_length: float) -> Material:
     """path_length: core-to-surface distance of the 1-D body (R)."""
@@ -118,7 +131,7 @@ def build_material(product: Product, pkg: Packaging, mass: float, envelope_volum
 
     def k_series(k_prod: float) -> float:
         # resistance per unit path length; k_eff * R reproduces the summed layer resistances
-        k_c = maxwell_eucken(k_prod, pkg.k_air, void_in_contents)
+        k_c = contents_k(k_prod, pkg.k_air, void_in_contents, product.air_segregation)
         r = phi_contents / k_c
         if phi_wall_smeared > 0:
             r += phi_wall_smeared / pkg.k_wall

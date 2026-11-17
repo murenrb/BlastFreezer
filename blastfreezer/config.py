@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field, fields
 from .foods import DEFAULT_FOOD, product_kwargs
 
 
-_D = product_kwargs(DEFAULT_FOOD)       # default product: beef carcass (choice), see foods.py
+_D = product_kwargs(DEFAULT_FOOD)       # default product: sausage (frankfurter), see foods.py
 
 
 @dataclass
@@ -24,6 +24,8 @@ class Product:
     name: str = _D["name"]
     water_fraction: float = _D["water_fraction"]     # total water, mass fraction of product [-]
     bound_water_fraction: float = 0.05               # fraction of that water that never freezes [-]
+    air_segregation: float = 0.5                     # share of the package's void air that surrounds the
+                                                     # product; the rest is mixed into it [-]
     cp_unfrozen: float = _D["cp_unfrozen"]           # J/kg-K
     cp_frozen: float = _D["cp_frozen"]               # J/kg-K
     k_unfrozen: float = _D["k_unfrozen"]             # W/m-K

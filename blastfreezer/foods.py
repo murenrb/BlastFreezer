@@ -145,7 +145,7 @@ FOODS: dict[str, Food] = {f.name: f for f in [
          f"{_PG}; ASHRAE Table 3"),
 ]}
 
-DEFAULT_FOOD = "Beef, carcass (choice)"
+DEFAULT_FOOD = "Sausage, frankfurter"
 CUSTOM = "Custom"
 
 
