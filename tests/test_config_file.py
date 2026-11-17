@@ -76,4 +76,5 @@ def test_loaded_config_drives_app():
     again = cf.collect(at2.session_state.to_dict())["inputs"]
     for k in ("si::mass", "w::inlet", "w::n_deep", "w::b_off_mode", "si::b_off_time"):
         assert again[k] == inputs[k], k
-    assert at2.slider(key="w::b_off_time::SI").value == 6.0
+    assert at2.session_state["units"] == "Imperial"                  # app default
+    assert at2.slider(key="w::b_off_time::Imperial").value == 6.0

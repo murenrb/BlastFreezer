@@ -43,11 +43,13 @@ FLOW_LABEL = {"left": "Left → right", "right": "Right → left", "bottom": "Bo
 st.set_page_config(page_title="Blast Freezing Simulator", layout="wide")
 D = Scenario()
 ss = st.session_state
+DEFAULT_UNITS = U.IP
+ss.setdefault("units", DEFAULT_UNITS)          # before any widget; the Units radio (Model tab) owns it
 
 
 # ---------------------------------------------------------- unit helpers ----
 def units() -> str:
-    return ss.get("units", U.SI)
+    return ss.get("units", DEFAULT_UNITS)
 
 
 def cv(q: str, v):
