@@ -1,3 +1,7 @@
+[global]
+# Loading a configuration file sets widget values through session state; that is intended.
+disableWidgetStateDuplicationWarning = true
+
 [server]
 runOnSave = true
 

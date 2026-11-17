@@ -5,9 +5,10 @@ Streamlit app for transient modeling of a blast freezing cell.
 ## Layout
 
 ```
-app.py                  Streamlit GUI: tabbed inputs, cell view with time slider, time series
+Blast_sim.py            Streamlit GUI: tabbed inputs, cell view with time slider, time series
 blastfreezer/
   config.py             Input dataclasses (Product, Packaging, PalletLoad, Air, Cell, SimSettings)
+  config_file.py        Save / load the GUI inputs as a JSON configuration file
   units.py              SI <-> Imperial display conversions (model is SI internally)
   foods.py              Product property library (ASHRAE / proposal generator, Choi-Okos k and density)
   viz.py                Plotly figures: cell view, temperature and power time series
@@ -32,9 +33,13 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
   from the load-in temperature (red) to the target (blue). The air loop runs from the main coil
   (above left, showing its SST) through the supply leg into the cell and back through the return
   leg; arrows follow the chosen flow direction (left/right or bottom/top). The boost coil is drawn
-  above the main coil as a parallel branch and is greyed out until boost is modelled. The time
+  above the main coil as a parallel branch (black while it runs, grey when off). The time
   slider and play button run in the browser, so the cell, air temperatures and SST update while
   dragging.
+- **Save / load configuration** (under Run solver) downloads every input as a JSON file and loads
+  one back, replacing all inputs. Values are stored in SI, so a file saved in Imperial loads the same
+  in SI. Everything stays on your machine. "Solved scenario JSON" (Model details) is the model-input
+  export of a solution, for scripting; it cannot be loaded back into the GUI.
 - Every solve runs twice, without and with the boost coil. The metrics show both cell freeze times
   and the time saved; the cell view toggles between the two runs (the boost coil is drawn black while
   it runs and greys out when it shuts off).
@@ -101,7 +106,7 @@ pip install -r requirements-dev.txt
 ## Run
 
 ```bash
-streamlit run app.py
+streamlit run Blast_sim.py
 pytest
 ```
 

@@ -1,6 +1,6 @@
 """Blast freezer cell model: Streamlit GUI.
 
-Run with:  streamlit run app.py
+Run with:  streamlit run Blast_sim.py
 
 Layout (see "gui example.png"):
   upper left   tabbed inputs (Pallet / Cell / Model / Boost) + Run solver
@@ -9,12 +9,14 @@ Layout (see "gui example.png"):
 
 All inputs are stored in SI in st.session_state["si::<id>"]. Widgets show the
 selected unit system and convert on the way in and out, so switching units
-keeps the values.
+keeps the values. Save / load configuration writes and reads that state as JSON
+(blastfreezer/config_file.py).
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +27,7 @@ import streamlit as st
 
 from blastfreezer import (PACKAGING_PRESETS, Air, CellSpec, Packaging, PalletLoad,
                           Product, Scenario, SimSettings, simulate_pair, summarize)
+from blastfreezer import config_file
 from blastfreezer import units as U
 from blastfreezer.cell import Cell
 from blastfreezer.config import REFRIGERANT_CHOICES, Boost, Cooling, coil_airflow, coil_return
@@ -88,11 +91,16 @@ def qw(kind: str, label: str, qid: str, q: str | None, default_si: float, lo_si:
 
 
 def islider(label: str, qid: str, default: int, lo: int, hi: int, **kw) -> int:
-    return int(st.slider(label, lo, hi, default, 1, key=f"w::{qid}", **kw))
+    key = f"w::{qid}"
+    if key in ss:                                   # e.g. from a loaded configuration file
+        ss[key] = min(max(int(ss[key]), lo), hi)
+    return int(st.slider(label, lo, hi, default, 1, key=key, **kw))
 
 
 # ---------------------------------------------------------------- inputs ----
 MAX_LAYERS = 20
+GEOMETRIES = ["auto", "plate", "sphere", "cylinder"]
+DRIVERS = ["Return air", "Airflow"]
 
 
 def pallet_tab() -> tuple[Product, Packaging, PalletLoad, float, float]:
@@ -165,7 +173,8 @@ def pallet_tab() -> tuple[Product, Packaging, PalletLoad, float, float]:
         with st.expander("Packaging details"):
             n_layers = st.select_slider(
                 f"Package height [{ul('length')}]", options=list(range(MAX_LAYERS, 0, -1)),
-                value=ss.setdefault("n_layers", int(round(l.height / D.packaging.package_height))),
+                value=min(max(int(ss.setdefault("n_layers", round(l.height / D.packaging.package_height))), 1),
+                          MAX_LAYERS),
                 key=f"w::n_layers::{units()}",       # per unit system, like qw(); value kept in ss
                 # labels must be unique: the widget maps its value back to an option by label
                 format_func=lambda n: f"{cv('length', height / n):.2f} ({n} layer{'s' * (n > 1)})",
@@ -312,7 +321,7 @@ def coil_ref_inputs(p: str, c) -> dict:
             coil_SST = qw("number", "Design SST", p + "coil_SST", "temp", c.coil_SST_design, -70, 0,
                           help=HELP["coil_SST"])
         with c2:
-            driver = st.segmented_control("Set by", ["Return air", "Airflow"], default="Return air",
+            driver = st.segmented_control("Set by", DRIVERS, default="Return air",
                                           key=f"w::{p}coil_driver", help=HELP["driver"])
             driver = driver or "Return air"
             if driver == "Return air":
@@ -433,7 +442,7 @@ def model_tab() -> tuple[SimSettings, float, float]:
         st.markdown("**Solver**")
         n_nodes = islider("Nodes, core → surface", "nodes", s.n_nodes, 10, 100,
                           help="40 gives ~1–2 % freeze-time error.")
-        st.selectbox("1-D geometry", ["auto", "plate", "sphere", "cylinder"], key="w::geom",
+        st.selectbox("1-D geometry", GEOMETRIES, key="w::geom",
                      help="auto: plate if the block's smallest dimension is < 0.5× the middle one, "
                           "otherwise an equivalent sphere (R = 3V/A).")
         t_max = qw("slider", "Max simulated time", "tmax", None, s.t_max_hours, 12, 500, unit_label="h",
@@ -443,6 +452,50 @@ def model_tab() -> tuple[SimSettings, float, float]:
         rec = qw("number", "Output interval", "rec", None, s.record_every_s, 60, 3600, si_scale=1 / 60,
                  unit_label="min", step=1.0, format="%.0f", help="Resolution of the time slider and plots.")
     return SimSettings(s.T_start, s.T_target, n_nodes, dt_max, t_max, rec), htc, reduction
+
+
+# ------------------------------------------------------- config file ----
+CONFIG_OPTIONS = {          # allowed values of selection inputs in a loaded file
+    "units": [U.SI, U.IP], "w::product": list(FOODS) + [CUSTOM], "custom_base": list(FOODS),
+    "w::pkg": list(PACKAGING_PRESETS), "w::geom": GEOMETRIES, "w::inlet": GUI_FACES,
+    "w::refrigerant": REFRIGERANT_CHOICES, "w::b_refrigerant": REFRIGERANT_CHOICES,
+    "w::coil_driver": DRIVERS + [None], "w::b_coil_driver": DRIVERS + [None],
+    "w::b_off_mode": list(BOOST_OFF_LABEL), "w::use_sp": [True, False],
+}
+
+
+def _upload_key() -> str:
+    return f"cfg_upload_{ss.get('cfg_n', 0)}"
+
+
+def _load_config():
+    """Uploader callback: runs before the script, so every widget is rebuilt from the loaded state."""
+    f = ss.get(_upload_key())
+    if f is None:
+        return
+    try:
+        notes = config_file.apply(ss, config_file.parse(f.getvalue()), CONFIG_OPTIONS)
+    except ValueError as e:
+        ss["cfg_msg"] = ("error", f"Could not load {f.name}: {e}")
+    else:
+        ss["cfg_msg"] = ("warning" if notes else "success",
+                         f"Loaded {f.name}." + ("  \n" + "  \n".join(f"• {n}" for n in notes) if notes else ""))
+    ss["cfg_n"] = ss.get("cfg_n", 0) + 1            # fresh, empty uploader: the same file can be loaded again
+
+
+def config_section(scenario: Scenario):
+    with st.expander("Save / load configuration"):
+        st.download_button("Save configuration", config_file.dumps(ss, scenario.to_dict()),
+                           f"blast_config_{datetime.now():%Y-%m-%d_%H%M}.json", "application/json",
+                           icon=":material/download:", width="stretch",
+                           help="Downloads every input as a JSON file (values in SI, whatever units are "
+                                "shown). Load it again below to pick up where you left off.")
+        st.file_uploader("Load configuration", type="json", key=_upload_key(), on_change=_load_config,
+                         help="Replaces all inputs with the ones in a saved configuration file. Results "
+                              "stay until you run the solver again.")
+        kind, msg = ss.pop("cfg_msg", (None, None))
+        if kind:
+            getattr(st, kind)(msg)
 
 
 # ---------------------------------------------------------------- layout ----
@@ -478,6 +531,7 @@ with left:
             ss["res"], ss["res_scn"] = {"off": off, "on": on}, scenario.to_dict()
         except ValueError as e:
             st.error(str(e))
+    config_section(scenario)
 
 res = ss.get("res")
 if res is not None and (not isinstance(res, dict) or "flow_m3s" not in res["on"].cell
@@ -613,5 +667,6 @@ else:
         d1, d2, d3 = st.columns(3)
         d1.download_button("Pallet history CSV (SI)", both("pallets"), "pallets.csv", "text/csv")
         d2.download_button("Cell history CSV (SI)", both("cell"), "cell.csv", "text/csv")
-        d3.download_button("Scenario JSON", json.dumps(shown.to_dict(), indent=2), "scenario.json",
-                           "application/json")
+        d3.download_button("Solved scenario JSON", json.dumps(shown.to_dict(), indent=2), "scenario.json",
+                           "application/json", help="Model inputs of this solution, for scripting. To reopen "
+                           "the inputs in the app, use Save / load configuration instead.")
