@@ -110,7 +110,7 @@ def pallet_tab() -> tuple[Product, Packaging, PalletLoad, float, float]:
     # Pallet column first: package height and spacers in the packaging details depend on its height.
     with c2:
         st.markdown("**Pallet**")
-        mass = qw("slider", "Product mass", "mass", "mass", l.mass, 100, 1200, step=5 if units() == U.SI else 10)
+        mass = qw("slider", "Total product weight on pallet", "mass", "mass", l.mass, 100, 1200, step=5 if units() == U.SI else 10)
         d1, d2, d3 = st.columns(3)
         with d1:
             length = qw("number", "Depth", "length", "length", l.length, 0.2, 3)
