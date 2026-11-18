@@ -642,9 +642,9 @@ else:
     with t_cool:
         st.plotly_chart(cooling_figure(off, on, cv, ul, design_kW=shown.cooling.ref_Q_design / 1000),
                         width="stretch")
-        st.caption("Areas: with boost, stacked to the total coil load (refrigeration load). Fan heat at the "
-                   "bottom; the rest (the pallet load) split between the main and boost coils in proportion "
-                   "to their coil loads. Dashed line: total coil load without boost. Raw per-coil loads are in "
+        st.caption("Areas: with boost, stacked to the total coil load (refrigeration load). Fan heat of the "
+                   "main and boost coil fans at the bottom; the rest (the pallet load) split between the main "
+                   "and boost coils in proportion to their coil loads. Dashed line: total coil load without boost. Raw per-coil loads are in "
                    "the cell history CSV.")
 
     with st.expander("Model details & data"):

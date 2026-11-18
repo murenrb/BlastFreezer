@@ -45,8 +45,8 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
   it runs and greys out when it shuts off).
 - Bottom, four tabs. Product temperature: warmest pallet core and surface node. Air temperature:
   supply and return air. Ref temperature: main and boost coil SST. One colour per quantity; dashed = without boost,
-  solid = with boost. Cooling: stacked areas for the boost run (fan heat, main coil, boost coil from
-  bottom to top) adding up to the total coil load, with the no-boost total as a dashed line. Each
+  solid = with boost. Cooling: stacked areas for the boost run (main coil fans, boost coil fans, main
+  coil, boost coil from bottom to top) adding up to the total coil load, with the no-boost total as a dashed line. Each
   coil's load includes its share of the fan heat, so the bands above the fan heat split the rest (the
   pallet load) between the coils in proportion to their loads. All "frozen" decisions use the
   warmest pallet.

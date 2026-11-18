@@ -334,7 +334,7 @@ def extreme_positions(freeze_times_h: Sequence, final_T_core: Sequence[float]) -
 # one colour per quantity; dashed = without boost, solid = with boost
 SERIES_COLORS = {"core": "#d7263d", "surface": "#f28e2b", "supply": "#1f77b4", "return": "#17becf",
                  "SST": "#2ca02c", "SST_boost": ACCENT, "coil": "#1f77b4", "boost_coil": ACCENT,
-                 "pallet": "#d7263d", "fan": "#f28e2b", "total": "#2b3a4a",
+                 "pallet": "#d7263d", "fan": "#f28e2b", "fan_boost": "#f7c548", "total": "#2b3a4a",
                  "main_out": "#0b3c8c", "boost_out": "#a58bff"}
 RUN_DASH = {False: "dash", True: "solid"}
 RUN_NAME = {False: "no boost", True: "boost"}
@@ -400,25 +400,28 @@ def ref_temperature_figure(off, on, cv: Callable, ul: Callable, height: int = 40
 
 
 def cooling_bands(C) -> dict:
-    """Stacked cooling bands [kW] that add up to the total coil load: fan heat, then the rest (= pallet
-    load) split between the main and boost coils in proportion to their coil loads. Each coil's raw load
-    includes its share of the fan heat, so stacking raw loads on top of fan heat would count it twice."""
+    """Stacked cooling bands [kW] that add up to the total coil load: fan heat of the main and boost
+    coils' own fans, then the rest (= pallet load) split between the main and boost coils in proportion
+    to their coil loads. Fan heat mixes into the supply air and comes back to both coils, so each coil's
+    raw load includes part of every fan's heat; stacking raw loads on top of fan heat would count it twice."""
     Q = C.Q_coil_kW.to_numpy(float)
     fan = C.fan_kW.to_numpy(float)
+    fan_boost = C.fan_boost_kW.to_numpy(float) if "fan_boost_kW" in C else np.zeros_like(fan)
     net = np.clip(Q - fan, 0.0, None)
     share = np.divide(C.Q_boost_kW.to_numpy(float), Q, out=np.zeros_like(Q), where=Q > 0)
-    return {"fan": fan, "main": net * (1.0 - share), "boost": net * share}
+    return {"fan_main": fan - fan_boost, "fan_boost": fan_boost, "main": net * (1.0 - share), "boost": net * share}
 
 
 def cooling_figure(off, on, cv: Callable, ul: Callable, height: int = 400,
                    design_kW: float | None = None) -> go.Figure:
-    """Stacked areas for the boost run (fan heat, main coil, boost coil, bottom to top); the run
-    without boost as a dashed total-coil-load line."""
+    """Stacked areas for the boost run (main coil fans, boost coil fans, main coil, boost coil, bottom to
+    top); the run without boost as a dashed total-coil-load line."""
     fig = go.Figure()
     if on is not None:
         C = on.cell
         bands = cooling_bands(C)
-        for key, label, color in (("fan", "Fan heat", SERIES_COLORS["fan"]),
+        for key, label, color in (("fan_main", "Main coil fans", SERIES_COLORS["fan"]),
+                                  ("fan_boost", "Boost coil fans", SERIES_COLORS["fan_boost"]),
                                   ("main", "Main coil", SERIES_COLORS["coil"]),
                                   ("boost", "Boost coil", SERIES_COLORS["boost_coil"])):
             fig.add_trace(go.Scatter(x=C.time_h, y=cv("power", bands[key]), name=f"{label} · boost",
@@ -441,4 +444,4 @@ def _alpha(hex_color: str, a: float) -> str:
 def _finish(fig, y_unit, height):
     fig.update_layout(height=height, xaxis_title="Blasting time [h]", yaxis_title=y_unit,
                       margin=dict(l=10, r=10, t=10, b=10), hovermode="x unified",
-                      legend=dict(orientation="h", y=-0.22))
+                      legend=dict(orientation="h", yanchor="top", y=-0.3))

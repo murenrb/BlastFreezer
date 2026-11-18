@@ -11,6 +11,7 @@ from .cell import Cell
 from .config import Scenario
 
 CELL_COLUMNS = ["time_h", "T_supply", "T_return", "Q_cell_kW", "Q_coil_kW", "Q_main_kW", "Q_boost_kW", "fan_kW",
+                "fan_main_kW", "fan_boost_kW",
                 "SST", "SST_boost", "T_coil_out", "T_boost_out", "T_main_supply", "T_boost_supply", "flow_m3s", "boost_on", "limit", "limit_boost",
                 "T_core_warmest", "n_frozen_positions"]
 PALLET_COLUMNS = ["time_h", "position", "T_core", "T_surface", "T_mean", "T_air_in", "T_air_out",
@@ -50,7 +51,8 @@ def simulate(s: Scenario, boost: bool = False) -> Result:
         flow = sum(c.C_air for c in bal.coils) / s.air.cp if bal.coils else cell.m_dot_total
         cell_rows.append((th, bal.T_supply, cell.T_air_out, cell.Q / 1000.0, bal.Q / 1000.0,
                           (main.Q if main else bal.Q) / 1000.0, (bst.Q if bst else 0.0) / 1000.0,
-                          bal.Q_fan / 1000.0, bal.SST, bst.SST if bst else nan, bal.T_coil_out,
+                          bal.Q_fan / 1000.0, (main.Q_fan if main else 0.0) / 1000.0,
+                          (bst.Q_fan if bst else 0.0) / 1000.0, bal.SST, bst.SST if bst else nan, bal.T_coil_out,
                           bst.T_out if bst else nan, main.T_supply if main else bal.T_supply,
                           bst.T_supply if bst else nan, flow * s.cooling.airflow / cell.m_main,
                           bst is not None, bal.limited, bst.limited if bst else "",

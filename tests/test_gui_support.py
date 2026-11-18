@@ -151,7 +151,7 @@ def test_time_series_figures_build():
 
     cool = cooling_figure(off, on, cv, ul, design_kW=100.0)
     stacked = [t for t in cool.data if t.stackgroup]
-    assert [t.legendgroup for t in stacked] == ["fan", "main", "boost"]       # bottom to top
+    assert [t.legendgroup for t in stacked] == ["fan_main", "fan_boost", "main", "boost"]   # bottom to top
     assert [t.line.dash for t in cool.data if not t.stackgroup] == ["dash"]   # total without boost
 
 
@@ -161,8 +161,10 @@ def test_cooling_bands_stack_to_total_load():
     s.boost.off_mode, s.boost.off_time_h = "time", 2.0
     C = simulate(s, boost=True).cell
     b = cooling_bands(C)
-    assert np.allclose(b["fan"] + b["main"] + b["boost"], C.Q_coil_kW)
+    assert np.allclose(b["fan_main"] + b["fan_boost"] + b["main"] + b["boost"], C.Q_coil_kW)
     assert all((v >= 0).all() for v in b.values())
+    assert np.allclose(b["fan_main"], s.cooling.fan_power / 1000)            # main fans run throughout
     after = (C.time_h > 2.0).to_numpy()
-    assert after.any() and (b["boost"][after] == 0).all()                    # boost off: band gone
+    assert np.allclose(b["fan_boost"][~after][1:], s.boost.fan_power / 1000)
+    assert after.any() and (b["boost"][after] == 0).all() and (b["fan_boost"][after] == 0).all()  # boost off
     assert (b["boost"][~after][1:] > 0).all()
