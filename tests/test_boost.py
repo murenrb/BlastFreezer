@@ -9,10 +9,10 @@ from blastfreezer.config import TON, _F
 from blastfreezer.refrigeration import Coil, CoilUnit, RefSystem, solve_balance, solve_parallel
 
 
-def _unit(scale=1.0, name="main", fan_W=5000.0, refrigerant="NH3", SST_max=None):
+def _unit(scale=1.0, name="main", fan_W=5000.0, refrigerant="NH3", SST_max=None, T_set=None):
     coil = Coil(32 * TON * scale, _F(-20), _F(0), _F(-30))
     ref = RefSystem(32 * TON * scale, _F(-30), refrigerant)
-    return CoilUnit(coil, ref, coil.design_C_air, fan_W * scale, SST_max, name)
+    return CoilUnit(coil, ref, coil.design_C_air, fan_W * scale, SST_max, name, T_set=T_set)
 
 
 def test_two_identical_units_equal_one_double_unit():
@@ -46,25 +46,56 @@ def test_single_unit_matches_legacy_wrapper():
     assert (w.SST, w.T_supply, w.Q) == pytest.approx((p.SST, p.T_supply, p.Q))
 
 
-def test_supply_setpoint_throttles_boost_first():
-    a, b = -4.0, 0.9                                       # light load: free air ~ -60 C
-    units = [_unit(), _unit(name="boost")]
-    free = solve_parallel(a, b, units)
-    T_set = free.T_supply + 1.0                            # small correction: boost alone can absorb it
-    held = solve_parallel(a, b, units, T_supply_min=T_set)
+def test_each_coil_holds_its_own_supply_setpoint():
+    """Main and boost at different setpoints: each coil throttles to its own outlet; the supply is their mix."""
+    a, b = -15.0, 0.5                                      # return air ~ -34 C
+    T_main, T_boost = _F(-30), -38.0
+    held = solve_parallel(a, b, [_unit(T_set=T_main), _unit(name="boost", T_set=T_boost)])
     main, boost = held.coils
-    assert held.T_supply == pytest.approx(T_set) and held.T_return == pytest.approx(a + b * T_set)
-    assert boost.limited == "supply setpoint" and main.limited != "supply setpoint"
-    assert boost.SST > main.SST                            # boost unloaded, main still at its free SST
-    held2 = solve_parallel(a, b, units, T_supply_min=-42.0)  # big correction: boost fully off, then main
-    assert held2.coils[1].Q == pytest.approx(0.0, abs=1e-6)
-    assert held2.coils[0].limited == "supply setpoint" and held2.coils[0].Q > 0
-    assert held2.T_supply == pytest.approx(-42.0)
-    # pallets here sit near -40 C: a -30 C supply can't be held even with both coils unloaded,
-    # so the air floats (coils never turn into heaters)
-    held3 = solve_parallel(a, b, units, T_supply_min=-30.0)
-    assert all(c.Q == pytest.approx(0.0, abs=1e-6) for c in held3.coils)
-    assert held3.T_supply < -30.0
+    assert main.T_supply == pytest.approx(T_main) and boost.T_supply == pytest.approx(T_boost)
+    assert main.limited == boost.limited == "supply setpoint" and main.Q > 0 and boost.Q > main.Q
+    assert held.T_supply == pytest.approx((main.C_air * T_main + boost.C_air * T_boost) / (main.C_air + boost.C_air))
+    assert held.T_return == pytest.approx(a + b * held.T_supply)
+    assert held.Q == pytest.approx(sum(c.C_air * (held.T_return - c.T_out) for c in held.coils))
+
+
+def test_cold_boost_unloads_the_main_coil():
+    """Once boost air pulls the return below the main setpoint, the main coil has nothing to do: zero load,
+    its outlet is return air plus fan heat (it never heats)."""
+    a, b = -20.0, 0.5
+    held = solve_parallel(a, b, [_unit(T_set=_F(-30)), _unit(name="boost", T_set=_F(-50))])
+    main, boost = held.coils
+    assert main.Q == pytest.approx(0.0, abs=1e-6) and main.SST == pytest.approx(held.T_return)
+    assert main.T_supply == pytest.approx(held.T_return + main.Q_fan / main.C_air) and main.T_supply < _F(-30)
+    assert boost.T_supply == pytest.approx(_F(-50)) and boost.Q > 0
+
+
+def test_setpoint_only_throttles_its_own_coil():
+    a, b = -4.0, 0.9
+    free = solve_parallel(a, b, [_unit(), _unit(name="boost")])
+    T_set = free.coils[1].T_supply + 1.0                   # boost setpoint just above its free outlet
+    held = solve_parallel(a, b, [_unit(), _unit(name="boost", T_set=T_set)])
+    main, boost = held.coils
+    assert boost.T_supply == pytest.approx(T_set) and boost.limited == "supply setpoint"
+    assert main.limited != "supply setpoint" and main.T_supply < T_set
+    # pallets near -40 C: -30 C can't be held even fully unloaded, so the air floats (never heats)
+    held2 = solve_parallel(a, b, [_unit(T_set=-30.0), _unit(name="boost", T_set=-30.0)])
+    assert all(c.Q == pytest.approx(0.0, abs=1e-6) and c.SST <= held2.T_return + 1e-9 for c in held2.coils)
+    assert held2.T_supply < -30.0
+
+
+def test_colder_boost_setpoint_shortens_the_blast():
+    from dataclasses import replace
+    s = Scenario()
+    base = simulate(s, boost=True)
+    cold = simulate(replace(s, boost=replace(s.boost, T_supply_setpoint=_F(-50))), boost=True)
+    C = cold.cell[cold.cell.boost_on]
+    assert C.T_boost_supply.min() >= _F(-50) - 1e-6
+    below = C.T_main_supply < _F(-30) - 1e-6               # only when the main coil is fully unloaded
+    assert np.allclose(C.Q_main_kW[below], 0.0, atol=1e-6)
+    assert (C.T_supply >= C[["T_main_supply", "T_boost_supply"]].min(axis=1) - 1e-9).all()
+    t = lambda r: summarize(r, s)["cell_freeze_time_h"]
+    assert t(cold) < t(base)
 
 
 def test_boost_off_at_time_drops_airflow():

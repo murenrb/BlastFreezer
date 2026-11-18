@@ -148,14 +148,15 @@ class Cell:
         if not self.fixed:
             self.coil = Coil(c.coil_Q_design, c.coil_T_supply_design, c.coil_T_return_design, c.coil_SST_design)
             self.ref = RefSystem(c.ref_Q_design, c.ref_SST_design, c.refrigerant)
-            self.main_unit = CoilUnit(self.coil, self.ref, self.m_main * s.air.cp, c.fan_power, c.SST_max, "main")
+            self.main_unit = CoilUnit(self.coil, self.ref, self.m_main * s.air.cp, c.fan_power, c.SST_max, "main",
+                                      T_set=c.T_supply_setpoint)
         if self.boost_enabled:
             b = s.boost
             self.boost_coil = Coil(b.coil_Q_design, b.coil_T_supply_design, b.coil_T_return_design,
                                    b.coil_SST_design)
             self.boost_ref = RefSystem(b.ref_Q_design, b.ref_SST_design, b.refrigerant)
             self.boost_unit = CoilUnit(self.boost_coil, self.boost_ref, self.m_boost * s.air.cp, b.fan_power,
-                                       b.SST_max, "boost")
+                                       b.SST_max, "boost", T_set=b.T_supply_setpoint)
         self._update_boost()
         self._apply_flow()
         self.balance = self._solve_supply()
@@ -210,7 +211,7 @@ class Cell:
             Tr = a + b * Ts
             return Balance(float("nan"), Ts, Tr, self.C_air * (Tr - Ts), "fixed supply", Ts, 0.0)
         units = [self.main_unit] + ([self.boost_unit] if self.boost_on else [])
-        return solve_parallel(a, b, units, T_supply_min=self.s.cooling.T_supply_setpoint)
+        return solve_parallel(a, b, units)
 
     @property
     def pallets(self):

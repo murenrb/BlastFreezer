@@ -334,7 +334,8 @@ def extreme_positions(freeze_times_h: Sequence, final_T_core: Sequence[float]) -
 # one colour per quantity; dashed = without boost, solid = with boost
 SERIES_COLORS = {"core": "#d7263d", "surface": "#f28e2b", "supply": "#1f77b4", "return": "#17becf",
                  "SST": "#2ca02c", "SST_boost": ACCENT, "coil": "#1f77b4", "boost_coil": ACCENT,
-                 "pallet": "#d7263d", "fan": "#f28e2b", "total": "#2b3a4a"}
+                 "pallet": "#d7263d", "fan": "#f28e2b", "total": "#2b3a4a",
+                 "main_out": "#0b3c8c", "boost_out": "#a58bff"}
 RUN_DASH = {False: "dash", True: "solid"}
 RUN_NAME = {False: "no boost", True: "boost"}
 
@@ -369,12 +370,18 @@ def product_temperature_figure(off, on, cv: Callable, ul: Callable, height: int 
 
 
 def air_temperature_figure(off, on, cv: Callable, ul: Callable, height: int = 400) -> go.Figure:
-    """Supply and return air."""
+    """Mixed supply and return air; for the boost run, also the air leaving each coil (after its fans)."""
     fig = go.Figure()
     for res, boost in _runs(off, on):
         C = res.cell
-        _add(fig, C.time_h, cv("temp", C.T_supply), "supply", "Supply air", boost)
+        _add(fig, C.time_h, cv("temp", C.T_supply), "supply", "Supply air (mixed)", boost)
         _add(fig, C.time_h, cv("temp", C.T_return), "return", "Return air", boost)
+        if boost and "T_boost_supply" in C and C.T_boost_supply.notna().any():
+            for col, key, label in (("T_main_supply", "main_out", "Main coil outlet"),
+                                    ("T_boost_supply", "boost_out", "Boost coil outlet")):
+                fig.add_trace(go.Scatter(x=C.time_h, y=cv("temp", C[col]), name=f"{label} · boost",
+                                         legendgroup=key,
+                                         line=dict(color=SERIES_COLORS[key], dash="dot", width=1.5)))
     _finish(fig, ul("temp"), height)
     return fig
 

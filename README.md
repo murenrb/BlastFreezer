@@ -87,8 +87,8 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
 - Fans: specific power input (default 1 hp per 1000 CFM); all fan power is added to the air
   leaving the coil, so coil load = pallet load + fan heat.
 - Controls: the plant holds SST at or below a max SST (above it, the coil gets what it needs).
-  Supply air is not allowed below a setpoint; once the pull-down reaches it, SST rises to hold
-  supply air there while the return air keeps falling toward it.
+  Air leaving the coil (after its fans) is not allowed below a setpoint; once the pull-down
+  reaches it, SST rises to hold it there while the return air keeps falling.
 - Each time step, with pallet states frozen, cell return air is linear in supply air, so the coil,
   refrigeration, fans and pallets are balanced exactly for SST and supply air.
 
@@ -99,8 +99,9 @@ tests/                  Verification vs. analytic conduction, Plank's equation, 
   surface HTC stays constant (the extra flow acts through air capacity in the eps-NTU air side).
 - Balance: for a fixed airflow each unit's free SST depends only on return air, so it is tabulated
   once per unit; the mixed balance is then one monotonic equation in return air, solved each step.
-- Controls: each unit has its own max SST. The supply-air setpoint applies to the mixed supply: the boost is
-  throttled first (down to zero load), then the main coil. Coils never act as heaters.
+- Controls: each unit has its own max SST and its own supply-air setpoint (e.g. boost −50 °F, main
+  −30 °F), each throttling only that coil (down to zero load; coils never act as heaters). The air
+  entering the pallets is the capacity-weighted mix of the two outlets.
 - Shutoff: never, at a set time, or when the warmest pallet core reaches a temperature. Off means
   fans and refrigeration stop, so the cell drops back to the main airflow. It stays off.
 

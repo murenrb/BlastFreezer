@@ -306,11 +306,11 @@ HELP = {
         "SST is held here and the coil gets whatever capacity it needs. Set it equal to the design SST "
         "for a stiff central plant, or high to model a dedicated, constrained system."),
     "T_set": (
-        "Lowest allowed supply air temperature (mixed air entering the pallets, after fan heat). The "
-        "system pulls down until supply air reaches the setpoint; from then on refrigeration capacity is "
-        "reduced (SST rises, like an evaporator pressure regulator) to hold supply air there, while the "
-        "return air keeps falling toward it as the pallets finish freezing. Airflow stays fixed. With the "
-        "boost coil running, the boost is throttled first, then the main coil."),
+        "Lowest allowed temperature of the air leaving this coil (after its fan heat). The coil pulls "
+        "down until its outlet reaches the setpoint; from then on its refrigeration capacity is reduced "
+        "(SST rises, like an evaporator pressure regulator) to hold the outlet there, while the return "
+        "air keeps falling as the pallets finish freezing. Airflow stays fixed. The main and boost coils "
+        "each have their own setpoint; the supply air entering the pallets is the mix of their outlets."),
     "boost_off": (
         "When the boost coil switches off: never, at a set blasting time, or once the warmest pallet "
         "(the last to freeze) reaches a core temperature. Off means its fans and refrigeration stop, so "
@@ -401,8 +401,8 @@ def cooling_tab() -> Cooling:
         with c1:
             SST_max = qw("number", "Max SST", "SST_max", "temp", c.SST_max, -70, 10, help=HELP["SST_max"])
         with c2:
-            T_set = qw("number", "Supply air setpoint", "T_sup_set", "temp", c.T_supply_setpoint, -70, 0,
-                       help=HELP["T_set"])
+            T_set = qw("number", "Main coil supply air setpoint", "T_sup_set", "temp", c.T_supply_setpoint,
+                       -70, 0, help=HELP["T_set"])
     design_caption(v)
     return Cooling(**{k: x for k, x in v.items() if not k.startswith("_")}, SST_max=SST_max,
                    T_supply_setpoint=T_set)
@@ -421,6 +421,8 @@ def boost_tab() -> Boost:
         c1, c2 = st.columns(2, gap="medium")
         with c1:
             SST_max = qw("number", "Max SST", "b_SST_max", "temp", b.SST_max, -70, 10, help=HELP["SST_max"])
+            T_set = qw("number", "Boost coil supply air setpoint", "b_T_sup_set", "temp", b.T_supply_setpoint,
+                       -70, 0, help=HELP["T_set"])
         with c2:
             mode = st.selectbox("Boost shutoff", list(BOOST_OFF_LABEL), key="w::b_off_mode",
                                 index=list(BOOST_OFF_LABEL).index(b.off_mode),
@@ -429,13 +431,14 @@ def boost_tab() -> Boost:
                           step=0.5, format="%.1f") if mode == "time" else ss.get("si::b_off_time", b.off_time_h)
             off_T = qw("slider", "Shut off when the warmest core reaches", "b_off_T", "temp", b.off_core_T,
                        -40, 10) if mode == "core" else ss.get("si::b_off_T", b.off_core_T)
-        st.caption("The supply air setpoint (Cooling tab → Controls) applies to the mixed supply air; "
-                   "the boost is throttled first, then the main coil.")
+        st.caption("The boost and main coils hold their own supply air setpoints (main: Cooling tab → "
+                   "Controls). The air entering the pallets is the mix of the two coil outlets.")
     when = {"never": "runs for the whole blast", "time": f"shuts off at {off_time:.1f} h",
             "core": f"shuts off when the warmest pallet core reaches {cv('temp', off_T):.1f} {ul('temp')}"}[mode]
     st.caption(f"**Boost {when}.**")
     design_caption(v)
-    return Boost(**{k: x for k, x in v.items() if not k.startswith("_")}, SST_max=SST_max, off_mode=mode,
+    return Boost(**{k: x for k, x in v.items() if not k.startswith("_")}, SST_max=SST_max,
+                 T_supply_setpoint=T_set, off_mode=mode,
                  off_time_h=off_time, off_core_T=off_T)
 
 
@@ -630,7 +633,8 @@ else:
     with t_air:
         st.plotly_chart(air_temperature_figure(off, on, cv, ul), width="stretch")
         st.caption("Dashed = without boost, solid = with boost. Supply = mixed air leaving the coils, after fan "
-                   "heat; return = air leaving the pallets, entering the coils.")
+                   "heat; dotted = air leaving each coil (boost run), each held at or above its own setpoint; "
+                   "return = air leaving the pallets, entering both coils.")
     with t_ref:
         st.plotly_chart(ref_temperature_figure(off, on, cv, ul), width="stretch")
         st.caption("Dashed = without boost, solid = with boost. Saturated suction temperature of each coil; "

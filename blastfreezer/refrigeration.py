@@ -34,12 +34,13 @@ and T_r = a + b * T_s(T_r) has one root (the right side rises slower than T_r),
 found with brentq.
 
 Controls: a unit whose free SST is above its SST_max is held at SST_max and the
-coil gets what it needs. If the free (mixed) supply air would be colder than the
-supply-air setpoint, supply air is held at the setpoint, so return air follows
-the cell: T_r = a + b * T_set, and units are throttled (SST raised, down to zero
-load) in reverse order, the last unit (boost) first, until their mixed outlet is
-T_set. As the pallets cool, return air keeps falling toward the setpoint while
-SST rises.
+coil gets what it needs. Each unit has its own supply-air setpoint (air leaving
+that unit, after its fans): if its free outlet would be colder, its SST is raised
+(down to zero load) to hold the outlet at the setpoint. So the boost can deliver
+-50 while the main coil holds -30; the supply air entering the pallets is their
+C-weighted mix. Each unit's outlet stays continuous and rises no faster than
+return air, so the single brentq root above covers the controlled case too. As
+the pallets cool, return air keeps falling while SST rises.
 """
 
 from __future__ import annotations
@@ -151,6 +152,11 @@ class CoilState:
     C_air: float             # W/K
     limited: str = ""
 
+    @property
+    def T_supply(self) -> float:
+        """Air leaving this unit, after its fan heat."""
+        return self.T_out + self.Q_fan / self.C_air
+
 
 @dataclass(frozen=True)
 class Balance:
@@ -168,8 +174,9 @@ class CoilUnit:
     """A coil with its own fans and refrigeration system, at a fixed airflow."""
 
     def __init__(self, coil: Coil, ref: RefSystem, C_air: float, fan_W: float = 0.0,
-                 SST_max: float | None = None, name: str = "main"):
-        self.name, self.C_air, self.fan_W, self.SST_max = name, C_air, fan_W, SST_max
+                 SST_max: float | None = None, name: str = "main", T_set: float | None = None):
+        """T_set: lowest allowed air temperature leaving this unit (after its fans); None = no limit."""
+        self.name, self.C_air, self.fan_W, self.SST_max, self.T_set = name, C_air, fan_W, SST_max, T_set
         self.eps = coil.effectiveness(C_air)
         self.d = fan_W / C_air
         S, vc = _volumetric_capacity_table(ref.refrigerant)
@@ -191,14 +198,27 @@ class CoilUnit:
         """Air leaving the coil, before fan heat."""
         return T_r - self.eps * (T_r - SST)
 
+    def operate(self, T_r: float) -> tuple[float, str]:
+        """SST with controls: free balance, then held at the supply setpoint if the outlet would be colder.
 
-def solve_parallel(a: float, b: float, units: list[CoilUnit], *,
-                   T_supply_min: float | None = None) -> Balance:
-    """Close coils + refrigeration + load with cell return air T_r = a + b * T_supply."""
+        Throttling stops at zero load (SST = return air): the coil never heats the air.
+        """
+        S, lim = self.free_SST(T_r)
+        if self.T_set is None or self.T_coil(T_r, S) + self.d >= self.T_set:
+            return S, lim
+        S_hold = T_r - (T_r + self.d - self.T_set) / self.eps      # outlet + fan heat = T_set
+        return min(S_hold, T_r), "supply setpoint"
+
+
+def solve_parallel(a: float, b: float, units: list[CoilUnit]) -> Balance:
+    """Close coils + refrigeration + load with cell return air T_r = a + b * T_supply.
+
+    Each unit runs at its own controls (CoilUnit.operate); the supply air is their C-weighted mix.
+    """
     C_tot = sum(u.C_air for u in units)
 
     def states(T_r):
-        return [u.free_SST(T_r) for u in units]
+        return [u.operate(T_r) for u in units]
 
     def T_mix(T_r, SSTs):
         return sum(u.C_air * (u.T_coil(T_r, S) + u.d) for u, S in zip(units, SSTs)) / C_tot
@@ -215,27 +235,6 @@ def solve_parallel(a: float, b: float, units: list[CoilUnit], *,
     st = states(T_r)
     SSTs, labels = [S for S, _ in st], [lim for _, lim in st]
 
-    if T_supply_min is not None and T_mix(T_r, SSTs) < T_supply_min:
-        T_r = a + b * T_supply_min                        # supply held: return air follows the cell
-        SSTs, labels = [S for S, _ in states(T_r)], [lim for _, lim in states(T_r)]
-        need = T_supply_min - T_mix(T_r, SSTs)            # > 0: mixed supply must warm by this much
-        for i in reversed(range(len(units))):             # last unit (boost) throttles first
-            if need <= 0.0:
-                break
-            u = units[i]
-            room = u.C_air * u.eps * (T_r - SSTs[i]) / C_tot  # warming available by unloading it fully
-            if room <= 0.0:
-                continue
-            take = min(need, room)
-            SSTs[i] += take * C_tot / (u.C_air * u.eps)
-            labels[i] = "supply setpoint"
-            need -= take
-        if need > 1e-9:                                   # everything unloaded (pallets colder than the
-                                                          # setpoint): supply floats, coils never heat
-            D = sum(u.C_air * u.d for u in units) / C_tot
-            T_r = (a + b * D) / (1.0 - b) if b < 1.0 else T_r
-            SSTs = [T_r] * len(units)
-
     coils = []
     for u, S, lim in zip(units, SSTs, labels):
         Tc = u.T_coil(T_r, S)
@@ -251,7 +250,7 @@ def solve_balance(a: float, b: float, C_air: float, coil: Coil, ref: RefSystem, 
                   fan_W: float = 0.0, SST_max: float | None = None,
                   T_supply_min: float | None = None) -> Balance:
     """Single coil unit: see solve_parallel. Fan heat is added to the air leaving the coil."""
-    return solve_parallel(a, b, [CoilUnit(coil, ref, C_air, fan_W, SST_max)], T_supply_min=T_supply_min)
+    return solve_parallel(a, b, [CoilUnit(coil, ref, C_air, fan_W, SST_max, T_set=T_supply_min)])
 
 
 def design_return_balance(coil: Coil, ref: RefSystem, C_air: float) -> Balance:

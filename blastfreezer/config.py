@@ -136,7 +136,7 @@ class Cooling:
     ref_SST_design: float = _F(-30.0)      # degC
     refrigerant: str = "NH3"
     SST_max: float = _F(-20.0)             # degC, plant holds suction at or below this
-    T_supply_setpoint: float = _F(-30.0)   # degC, supply air (mixed, after fans) is not allowed below this
+    T_supply_setpoint: float = _F(-30.0)   # degC, air leaving the main coil (after its fans) is held at or above this
     fixed_supply_T: float | None = None    # degC; if set, bypasses the coil (verification/comparison)
 
     @property
@@ -161,8 +161,8 @@ class Boost:
     """Boost coil: a second coil with its own fans and refrigeration system, in parallel with
     the main coil. Return air splits between the coils and their outlets mix into the supply.
 
-    Same inputs as the main coil (defaults copy it). The supply-air setpoint on Cooling applies
-    to both; the boost is throttled first. It switches off (fans and refrigeration, so its
+    Same inputs as the main coil (defaults copy it), including its own supply-air setpoint for the
+    air leaving the boost coil (after its fans), independent of the main coil's. It switches off (fans and refrigeration, so its
     airflow stops) per off_mode: "never", "time" (at off_time_h), or "core" (when the warmest
     pallet core reaches off_core_T). Once off it stays off.
     """
@@ -176,6 +176,7 @@ class Boost:
     ref_SST_design: float = _F(-30.0)
     refrigerant: str = "NH3"
     SST_max: float = _F(-20.0)
+    T_supply_setpoint: float = _F(-30.0)   # degC, air leaving the boost coil (after its fans)
     off_mode: str = "never"
     off_time_h: float = 8.0
     off_core_T: float = -5.0

@@ -135,13 +135,14 @@ def test_time_series_figures_build():
     prod, air = product_temperature_figure(off, on, cv, ul), air_temperature_figure(off, on, cv, ul)
     ref = ref_temperature_figure(off, on, cv, ul)
     assert len(prod.data) == 2 + 2         # core, surface per run
-    assert len(air.data) == 2 + 2          # supply, return per run
+    assert len(air.data) == 2 + 2 + 2      # supply, return per run; each coil outlet on the boost run
     assert len(ref.data) == 1 + 2          # main SST; + boost SST on the boost run
     assert all("warmest" in t.name for t in prod.data)
     assert all(t.name.startswith("SST") for t in ref.data)
     lines = prod.data + air.data + ref.data
-    for t in lines:                        # dashed without boost, solid with
-        assert t.line.dash == ("solid" if t.name.endswith("· boost") else "dash")
+    for t in lines:                        # dashed without boost, solid with; coil outlets dotted
+        want = "dot" if "coil outlet" in t.name else "solid" if t.name.endswith("· boost") else "dash"
+        assert t.line.dash == want
     colors = {t.legendgroup: t.line.color for t in lines}
     assert len(set(colors.values())) == len(colors)          # one colour per quantity
     assert len(product_temperature_figure(off, None, cv, ul).data) == 2
